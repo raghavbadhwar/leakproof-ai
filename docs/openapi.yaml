@@ -1,0 +1,138 @@
+openapi: 3.1.0
+info:
+  title: LeakProof AI API
+  version: 0.1.0
+  description: API contract for the Gemini-backed revenue audit workspace.
+paths:
+  /api/workspaces:
+    post:
+      summary: Create an audit workspace
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organization_id, name]
+              properties:
+                organization_id:
+                  type: string
+                  format: uuid
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Workspace created
+  /api/documents/upload:
+    post:
+      summary: Upload a source document
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [organization_id, workspace_id, document_type, file]
+              properties:
+                organization_id:
+                  type: string
+                  format: uuid
+                workspace_id:
+                  type: string
+                  format: uuid
+                document_type:
+                  type: string
+                  enum: [contract, invoice_csv, usage_csv, customer_csv]
+                customer_id:
+                  type: string
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Uploaded
+  /api/extraction/run:
+    post:
+      summary: Start contract extraction
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Extraction completed
+  /api/reconciliation/run:
+    post:
+      summary: Run deterministic reconciliation
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Reconciliation completed
+  /api/findings:
+    get:
+      summary: List findings
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: organization_id
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: workspace_id
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Findings list
+  /api/findings/{id}:
+    get:
+      summary: Get finding detail
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Finding detail
+  /api/findings/{id}/status:
+    patch:
+      summary: Update finding status
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [approved, dismissed, needs_review, customer_ready, recovered, not_recoverable]
+                note:
+                  type: string
+      responses:
+        '200':
+          description: Updated
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

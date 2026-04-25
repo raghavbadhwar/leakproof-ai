@@ -1,0 +1,41 @@
+{
+  "name": "leakproof-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI revenue leakage recovery MVP build pack for Codex.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "env:check": "node scripts/env-check.mjs",
+    "production:gate": "pnpm env:check && pnpm test && pnpm typecheck && pnpm lint && pnpm build",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "echo \"Playwright tests require production Supabase credentials and browser runner\"",
+    "smoke": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^1.50.1",
+    "@supabase/ssr": "^0.10.2",
+    "@supabase/supabase-js": "latest",
+    "lucide-react": "^1.11.0",
+    "mammoth": "^1.12.0",
+    "next": "latest",
+    "pdf-parse": "^2.4.5",
+    "react": "latest",
+    "react-dom": "latest",
+    "server-only": "^0.0.1",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.4",
+    "typescript": "latest",
+    "vitest": "latest"
+  }
+}

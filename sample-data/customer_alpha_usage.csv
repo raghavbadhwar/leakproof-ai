@@ -1,0 +1,2 @@
+customer_external_id,customer_name,period_start,period_end,metric_name,quantity
+alpha,Alpha Retail Cloud Ltd.,2026-03-01,2026-03-31,api_calls,125000

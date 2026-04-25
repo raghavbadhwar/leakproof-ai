@@ -1,0 +1,2 @@
+customer_external_id,customer_name,invoice_id,invoice_date,line_item,quantity,unit_price,amount,currency
+alpha,Alpha Retail Cloud Ltd.,INV-1001,2026-03-31,Monthly platform fee,1,8000.00,8000.00,USD
