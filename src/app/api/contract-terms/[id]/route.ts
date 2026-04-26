@@ -21,6 +21,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .select('workspace_id')
       .eq('id', id)
       .eq('organization_id', body.organization_id)
+      .eq('is_active', true)
       .single();
     if (currentTermError) throw currentTermError;
     await assertWorkspaceBelongsToOrganization(body.organization_id, currentTerm.workspace_id);
@@ -43,6 +44,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .eq('id', id)
       .eq('organization_id', body.organization_id)
       .eq('workspace_id', currentTerm.workspace_id)
+      .eq('is_active', true)
       .select('*')
       .single();
 

@@ -18,6 +18,7 @@ export async function GET(request: Request) {
       .select('*')
       .eq('organization_id', query.organization_id)
       .eq('workspace_id', query.workspace_id)
+      .eq('is_active', true)
       .order('created_at', { ascending: true });
 
     if (error) throw error;

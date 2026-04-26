@@ -6,9 +6,29 @@ import { createSupabaseBrowserClient } from '@/lib/db/supabaseBrowser';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  async function signInWithPassword() {
+    const supabase = createSupabaseBrowserClient();
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) throw signInError;
+    window.location.assign('/app');
+  }
+
+  async function sendMagicLink() {
+    const supabase = createSupabaseBrowserClient();
+    const { error: signInError } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${window.location.origin}/app`
+      }
+    });
+    if (signInError) throw signInError;
+    setMessage('Check your email for the sign-in link.');
+  }
 
   return (
     <main className="login-screen">
@@ -20,15 +40,7 @@ export default function LoginPage() {
           setMessage(null);
           startTransition(async () => {
             try {
-              const supabase = createSupabaseBrowserClient();
-              const { error: signInError } = await supabase.auth.signInWithOtp({
-                email,
-                options: {
-                  emailRedirectTo: `${window.location.origin}/app`
-                }
-              });
-              if (signInError) throw signInError;
-              setMessage('Check your email for the sign-in link.');
+              await signInWithPassword();
             } catch (err) {
               setError(err instanceof Error ? err.message : 'Could not start sign in.');
             }
@@ -46,9 +58,34 @@ export default function LoginPage() {
           placeholder="finance@example.com"
           required
         />
+        <input
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="Password"
+          required
+        />
         <button type="submit" disabled={isPending}>
           {isPending ? <Loader2 className="spin" size={16} /> : null}
-          Send sign-in link
+          Sign in
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={isPending || !email}
+          onClick={() => {
+            setError(null);
+            setMessage(null);
+            startTransition(async () => {
+              try {
+                await sendMagicLink();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Could not send sign-in link.');
+              }
+            });
+          }}
+        >
+          Send magic link instead
         </button>
         {message ? <p className="success-text">{message}</p> : null}
         {error ? <p className="error-text">{error}</p> : null}

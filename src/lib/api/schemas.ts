@@ -17,7 +17,29 @@ export const uploadMetadataSchema = z.object({
   organization_id: uuidSchema,
   workspace_id: uuidSchema,
   document_type: z.enum(['contract', 'invoice_csv', 'usage_csv', 'customer_csv']),
-  customer_id: uuidSchema.optional()
+  customer_id: uuidSchema.optional(),
+  customer_external_id: z.string().trim().min(1).max(160).optional(),
+  customer_name: z.string().trim().min(1).max(240).optional(),
+  domain: z.string().trim().min(1).max(253).optional()
+});
+
+export const customerQuerySchema = z.object({
+  organization_id: uuidSchema
+});
+
+export const createCustomerSchema = z.object({
+  organization_id: uuidSchema,
+  customer_external_id: z.string().trim().min(1).max(160).optional(),
+  customer_name: z.string().trim().min(1).max(240),
+  domain: z.string().trim().min(1).max(253).optional()
+});
+
+export const assignDocumentCustomerSchema = z.object({
+  organization_id: uuidSchema,
+  customer_id: uuidSchema.optional(),
+  customer_external_id: z.string().trim().min(1).max(160).optional(),
+  customer_name: z.string().trim().min(1).max(240).optional(),
+  domain: z.string().trim().min(1).max(253).optional()
 });
 
 export const runExtractionSchema = z.object({

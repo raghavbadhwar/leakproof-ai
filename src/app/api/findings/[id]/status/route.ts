@@ -24,6 +24,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .select('status, workspace_id')
       .eq('id', id)
       .eq('organization_id', organizationId)
+      .eq('is_active', true)
       .single();
 
     if (currentError) throw currentError;
@@ -42,6 +43,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .eq('id', id)
       .eq('organization_id', organizationId)
       .eq('workspace_id', currentFinding.workspace_id)
+      .eq('is_active', true)
       .select('*')
       .single();
 

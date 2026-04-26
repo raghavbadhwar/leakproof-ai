@@ -5,6 +5,7 @@ import { writeAuditEvent } from '@/lib/db/audit';
 import { assertWorkspaceBelongsToOrganization, requireOrganizationMember } from '@/lib/db/auth';
 import { assertRoleAllowed, REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
+import { isEvidenceCandidateExportReady } from '@/lib/evidence/candidates';
 
 export const runtime = 'nodejs';
 
@@ -22,6 +23,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       .select('*')
       .eq('id', id)
       .eq('organization_id', organizationId)
+      .eq('is_active', true)
       .single();
     if (findingError) throw findingError;
     await assertWorkspaceBelongsToOrganization(organizationId, finding.workspace_id);
@@ -30,14 +32,37 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       throw new Error('invalid_status_transition');
     }
 
-    const { data: evidence, error: evidenceError } = await supabase
-      .from('evidence_items')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .eq('workspace_id', finding.workspace_id)
-      .eq('finding_id', id)
-      .order('created_at', { ascending: true });
+    const [{ data: evidence, error: evidenceError }, { data: candidates, error: candidatesError }] = await Promise.all([
+      supabase
+        .from('evidence_items')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .eq('workspace_id', finding.workspace_id)
+        .eq('finding_id', id)
+        .eq('approval_state', 'approved')
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('evidence_candidates')
+        .select('approval_state, attached_evidence_item_id')
+        .eq('organization_id', organizationId)
+        .eq('workspace_id', finding.workspace_id)
+        .eq('finding_id', id)
+    ]);
     if (evidenceError) throw evidenceError;
+    if (candidatesError) throw candidatesError;
+
+    const candidateEvidenceIds = new Set(
+      (candidates ?? []).filter((candidate) => candidate.attached_evidence_item_id).map((candidate) => candidate.attached_evidence_item_id as string)
+    );
+    const approvedCandidateEvidenceIds = new Set(
+      (candidates ?? [])
+        .filter(isEvidenceCandidateExportReady)
+        .map((candidate) => candidate.attached_evidence_item_id as string)
+    );
+    const exportableEvidence = (evidence ?? []).filter((item) => !candidateEvidenceIds.has(item.id) || approvedCandidateEvidenceIds.has(item.id));
+    if (exportableEvidence.length === 0) {
+      throw new Error('approved_evidence_required');
+    }
 
     await writeAuditEvent(supabase, {
       organizationId,
@@ -50,7 +75,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       }
     });
 
-    return NextResponse.json({ finding, evidence: evidence ?? [], export_status: 'ready' });
+    return NextResponse.json({ finding, evidence: exportableEvidence, export_status: 'ready' });
   } catch (error) {
     return handleApiError(error);
   }

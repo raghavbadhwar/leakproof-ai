@@ -59,10 +59,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 	    if (body.action === 'approve') {
 	      const { error: findingError } = await supabase
 	        .from('leakage_findings')
-	        .update({ evidence_coverage_status: 'complete', updated_at: reviewedAt })
-	        .eq('id', candidate.finding_id)
-	        .eq('organization_id', body.organization_id)
-	        .eq('workspace_id', candidate.workspace_id);
+          .update({ evidence_coverage_status: 'complete', updated_at: reviewedAt })
+          .eq('id', candidate.finding_id)
+          .eq('organization_id', body.organization_id)
+          .eq('workspace_id', candidate.workspace_id)
+          .eq('is_active', true);
 	      if (findingError) throw findingError;
 	    }
 
@@ -145,8 +146,18 @@ async function getCandidate(
     .eq('organization_id', organizationId)
     .single();
   if (error) throw error;
-	  return data as CandidateWithChunk;
-	}
+  const candidate = data as CandidateWithChunk;
+  const { data: finding, error: findingError } = await supabase
+    .from('leakage_findings')
+    .select('id')
+    .eq('id', candidate.finding_id)
+    .eq('organization_id', organizationId)
+    .eq('workspace_id', candidate.workspace_id)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (findingError || !finding) throw new Error('forbidden');
+  return candidate;
+		}
 
 function documentTypeForCandidate(candidate: CandidateWithChunk): string {
   const relation = candidate.document_chunks?.source_documents;

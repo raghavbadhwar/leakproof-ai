@@ -50,26 +50,67 @@ export async function generateGeminiJson<T>(input: GenerateGeminiJsonInput): Pro
   const config = validateAiConfig(env);
   const model = input.model ?? config.generation.model;
   const client = createGeminiClient();
-
-  const response = await client.models.generateContent({
+  const { response, usedModel } = await generateContentWithFallback(client, {
     model,
-    contents: input.prompt,
-    config: {
-      temperature: 0,
-      responseMimeType: 'application/json',
-      systemInstruction: input.systemInstruction
-    }
+    fallbackModel: config.generation.fastModel,
+    fallbackEnabled: config.fallbackEnabled,
+    prompt: input.prompt,
+    systemInstruction: input.systemInstruction
   });
 
   return {
     data: parseGeminiJsonResponse<T>(response.text),
     provenance: {
       provider: 'gemini',
-      model,
+      model: usedModel,
       modelVersion: response.modelVersion,
       promptVersion: input.promptVersion
     }
   };
+}
+
+async function generateContentWithFallback(
+  client: GoogleGenAI,
+  input: {
+    model: string;
+    fallbackModel: string;
+    fallbackEnabled: boolean;
+    prompt: string;
+    systemInstruction: string;
+  }
+) {
+  try {
+    return {
+      response: await generateJsonContent(client, input.model, input.prompt, input.systemInstruction),
+      usedModel: input.model
+    };
+  } catch (error) {
+    if (!input.fallbackEnabled || input.model === input.fallbackModel || !isQuotaOrRateLimitError(error)) {
+      throw error;
+    }
+
+    return {
+      response: await generateJsonContent(client, input.fallbackModel, input.prompt, input.systemInstruction),
+      usedModel: input.fallbackModel
+    };
+  }
+}
+
+function generateJsonContent(client: GoogleGenAI, model: string, prompt: string, systemInstruction: string) {
+  return client.models.generateContent({
+    model,
+    contents: prompt,
+    config: {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      systemInstruction
+    }
+  });
+}
+
+function isQuotaOrRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /RESOURCE_EXHAUSTED|quota|rate[- ]?limit|429/i.test(message);
 }
 
 export async function embedGeminiContent(input: EmbedGeminiContentInput): Promise<EmbedGeminiContentResult> {

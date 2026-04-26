@@ -4,10 +4,11 @@ import { uploadMetadataSchema } from '@/lib/api/schemas';
 import { handleApiError, jsonError } from '@/lib/api/responses';
 import { writeAuditEvent } from '@/lib/db/audit';
 import { requireWorkspaceRole } from '@/lib/db/auth';
+import { findOrCreateCustomer, resolveCustomerForUpload } from '@/lib/db/customers';
 import { REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { chunkCsvRows, chunkTextDocument, type DocumentChunk } from '@/lib/ingest/chunking';
-import { parseInvoiceCsv, parseUsageCsv } from '@/lib/ingest/csv';
+import { parseCustomerCsv, parseInvoiceCsv, parseUsageCsv } from '@/lib/ingest/csv';
 import { extractDocumentText, type ExtractedDocumentText } from '@/lib/ingest/documentText';
 import { buildTenantStoragePath, validateUpload } from '@/lib/uploads/validation';
 
@@ -25,7 +26,10 @@ export async function POST(request: Request) {
       organization_id: form.get('organization_id'),
       workspace_id: form.get('workspace_id'),
       document_type: form.get('document_type'),
-      customer_id: form.get('customer_id') || undefined
+      customer_id: form.get('customer_id') || undefined,
+      customer_external_id: form.get('customer_external_id') || undefined,
+      customer_name: form.get('customer_name') || undefined,
+      domain: form.get('domain') || undefined
     });
     const auth = await requireWorkspaceRole(request, metadata.organization_id, metadata.workspace_id, REVIEWER_WRITE_ROLES);
 
@@ -52,9 +56,16 @@ export async function POST(request: Request) {
       metadata.document_type === 'contract'
         ? await extractDocumentText({ bytes, mimeType: file.type, fileName: file.name })
         : null;
-    if (metadata.customer_id) {
-      await assertCustomerBelongsToOrg(supabase, metadata.organization_id, metadata.customer_id);
-    }
+    const customerAssignment =
+      metadata.document_type === 'contract'
+        ? await resolveCustomerForUpload(supabase, {
+            organizationId: metadata.organization_id,
+            customerId: metadata.customer_id,
+            externalId: metadata.customer_external_id,
+            name: metadata.customer_name,
+            domain: metadata.domain
+          })
+        : { customerId: null, matchedBy: 'unassigned' as const, confidence: 0, reviewNeeded: false };
 
     const { error: storageError } = await supabase.storage.from('source-documents').upload(storagePath, bytes, {
       contentType: file.type,
@@ -67,7 +78,7 @@ export async function POST(request: Request) {
       .insert({
         organization_id: metadata.organization_id,
         workspace_id: metadata.workspace_id,
-        customer_id: metadata.customer_id,
+        customer_id: customerAssignment.customerId,
         document_type: metadata.document_type,
         file_name: file.name,
         storage_path: storagePath,
@@ -88,7 +99,11 @@ export async function POST(request: Request) {
       entityType: 'source_document',
       entityId: document.id,
       metadata: {
-        document_type: metadata.document_type
+        document_type: metadata.document_type,
+        customer_id: customerAssignment.customerId,
+        customer_match_method: customerAssignment.matchedBy,
+        customer_match_confidence: customerAssignment.confidence,
+        customer_review_needed: customerAssignment.reviewNeeded
       }
     });
 
@@ -124,6 +139,14 @@ export async function POST(request: Request) {
       });
     }
 
+    if (metadata.document_type === 'customer_csv') {
+      const records = parseCustomerCsv(bytes.toString('utf8'));
+      await ingestCustomerRecords(supabase, {
+        organizationId: metadata.organization_id,
+        records
+      });
+    }
+
     await writeAuditEvent(supabase, {
       organizationId: metadata.organization_id,
       actorUserId: auth.userId,
@@ -139,7 +162,7 @@ export async function POST(request: Request) {
     await supabase
       .from('source_documents')
       .update({
-        parse_status: ['contract', 'invoice_csv', 'usage_csv'].includes(metadata.document_type) ? 'parsed' : 'pending',
+        parse_status: ['contract', 'invoice_csv', 'usage_csv', 'customer_csv'].includes(metadata.document_type) ? 'parsed' : 'pending',
         extracted_text_status: extractedContractText || metadata.document_type.endsWith('_csv') ? 'parsed' : 'unsupported',
         chunking_status: chunks.length > 0 ? 'chunked' : 'unsupported',
         embedding_status: chunks.length > 0 ? 'pending' : 'unsupported',
@@ -151,6 +174,21 @@ export async function POST(request: Request) {
     await writeAuditEvent(supabase, {
       organizationId: metadata.organization_id,
       actorUserId: auth.userId,
+      eventType: 'customer.assignment_changed',
+      entityType: 'source_document',
+      entityId: document.id,
+      metadata: {
+        previous_customer_id: null,
+        new_customer_id: customerAssignment.customerId,
+        match_method: customerAssignment.matchedBy,
+        match_confidence: customerAssignment.confidence,
+        review_needed: customerAssignment.reviewNeeded
+      }
+    });
+
+    await writeAuditEvent(supabase, {
+      organizationId: metadata.organization_id,
+      actorUserId: auth.userId,
       eventType: 'upload.created',
       entityType: 'source_document',
       entityId: document.id,
@@ -158,7 +196,10 @@ export async function POST(request: Request) {
         document_type: metadata.document_type,
         file_name: file.name,
         size_bytes: file.size,
-        storage_path: storagePath
+        storage_path: storagePath,
+        customer_id: customerAssignment.customerId,
+        customer_match_method: customerAssignment.matchedBy,
+        customer_review_needed: customerAssignment.reviewNeeded
       }
     });
 
@@ -237,46 +278,6 @@ async function insertDocumentChunks(
   if (error) throw error;
 }
 
-async function findOrCreateCustomer(
-  supabase: ReturnType<typeof createSupabaseServiceClient>,
-  input: { organizationId: string; externalId: string; name: string }
-): Promise<string> {
-  const { data: existing, error: existingError } = await supabase
-    .from('customers')
-    .select('id')
-    .eq('organization_id', input.organizationId)
-    .eq('external_id', input.externalId)
-    .maybeSingle();
-
-  if (existingError) throw existingError;
-  if (existing) return existing.id;
-
-  const { data: created, error: createError } = await supabase
-    .from('customers')
-    .insert({
-      organization_id: input.organizationId,
-      external_id: input.externalId,
-      name: input.name
-    })
-    .select('id')
-    .single();
-
-  if (createError) throw createError;
-  return created.id;
-}
-
-async function assertCustomerBelongsToOrg(
-  supabase: ReturnType<typeof createSupabaseServiceClient>,
-  organizationId: string,
-  customerId: string
-): Promise<void> {
-  const { data, error } = await supabase.from('customers').select('id').eq('id', customerId).eq('organization_id', organizationId).maybeSingle();
-
-  if (error || !data) {
-    throw new Error('forbidden');
-  }
-}
-
 async function ingestInvoiceRecords(
   supabase: ReturnType<typeof createSupabaseServiceClient>,
   input: {
@@ -287,24 +288,40 @@ async function ingestInvoiceRecords(
   }
 ) {
   const rows = await Promise.all(
-    input.records.map(async (record) => ({
-      organization_id: input.organizationId,
-      workspace_id: input.workspaceId,
-      customer_id: await findOrCreateCustomer(supabase, {
+    input.records.map(async (record) => {
+      const customerAssignment = await findOrCreateCustomer(supabase, {
         organizationId: input.organizationId,
         externalId: record.customerExternalId,
-        name: record.customerName
-      }),
-      source_document_id: input.sourceDocumentId,
-      invoice_id: record.invoiceId,
-      invoice_date: record.invoiceDate,
-      line_item: record.lineItem,
-      quantity: record.quantity,
-      unit_price_minor: record.unitPriceMinor,
-      amount_minor: record.amountMinor,
-      currency: record.currency,
-      row_citation: record.citation
-    }))
+        name: record.customerName,
+        segment: record.customerSegment,
+        billingModel: record.billingModel,
+        contractType: record.contractType,
+        contractValueMinor: record.contractValueMinor,
+        currency: record.currency,
+        renewalDate: record.renewalDate,
+        ownerLabel: record.ownerLabel,
+        domain: record.domain
+      });
+      return {
+        organization_id: input.organizationId,
+        workspace_id: input.workspaceId,
+        customer_id: customerAssignment.customerId,
+        source_document_id: input.sourceDocumentId,
+        invoice_id: record.invoiceId,
+        invoice_date: record.invoiceDate,
+        line_item: record.lineItem,
+        quantity: record.quantity,
+        unit_price_minor: record.unitPriceMinor,
+        amount_minor: record.amountMinor,
+        currency: record.currency,
+        billing_model: record.billingModel,
+        product_label: record.productLabel,
+        team_label: record.teamLabel,
+        service_period_start: record.servicePeriodStart,
+        service_period_end: record.servicePeriodEnd,
+        row_citation: record.citation
+      };
+    })
   );
 
   if (rows.length > 0) {
@@ -323,25 +340,61 @@ async function ingestUsageRecords(
   }
 ) {
   const rows = await Promise.all(
-    input.records.map(async (record) => ({
-      organization_id: input.organizationId,
-      workspace_id: input.workspaceId,
-      customer_id: await findOrCreateCustomer(supabase, {
+    input.records.map(async (record) => {
+      const customerAssignment = await findOrCreateCustomer(supabase, {
         organizationId: input.organizationId,
         externalId: record.customerExternalId,
-        name: record.customerName
-      }),
-      source_document_id: input.sourceDocumentId,
-      period_start: record.periodStart,
-      period_end: record.periodEnd,
-      metric_name: record.metricName,
-      quantity: record.quantity,
-      row_citation: record.citation
-    }))
+        name: record.customerName,
+        segment: record.customerSegment,
+        billingModel: record.billingModel,
+        contractType: record.contractType,
+        contractValueMinor: record.contractValueMinor,
+        renewalDate: record.renewalDate,
+        ownerLabel: record.ownerLabel,
+        domain: record.domain
+      });
+      return {
+        organization_id: input.organizationId,
+        workspace_id: input.workspaceId,
+        customer_id: customerAssignment.customerId,
+        source_document_id: input.sourceDocumentId,
+        period_start: record.periodStart,
+        period_end: record.periodEnd,
+        metric_name: record.metricName,
+        quantity: record.quantity,
+        product_label: record.productLabel,
+        team_label: record.teamLabel,
+        row_citation: record.citation
+      };
+    })
   );
 
   if (rows.length > 0) {
     const { error } = await supabase.from('usage_records').insert(rows);
     if (error) throw error;
+  }
+}
+
+async function ingestCustomerRecords(
+  supabase: ReturnType<typeof createSupabaseServiceClient>,
+  input: {
+    organizationId: string;
+    records: ReturnType<typeof parseCustomerCsv>;
+  }
+) {
+  for (const record of input.records) {
+    await findOrCreateCustomer(supabase, {
+      organizationId: input.organizationId,
+      externalId: record.customerExternalId,
+      name: record.customerName,
+      segment: record.customerSegment,
+      billingModel: record.billingModel,
+      contractType: record.contractType,
+      contractValueMinor: record.contractValueMinor,
+      currency: record.currency,
+      renewalDate: record.renewalDate,
+      ownerLabel: record.ownerLabel,
+      domain: record.domain
+    });
   }
 }

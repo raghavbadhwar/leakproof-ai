@@ -19,6 +19,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       .select('*')
       .eq('id', id)
       .eq('organization_id', organizationId)
+      .eq('is_active', true)
       .single();
 
     if (findingError) throw findingError;
@@ -32,6 +33,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           .eq('organization_id', organizationId)
           .eq('workspace_id', finding.workspace_id)
           .eq('finding_id', id)
+          .eq('approval_state', 'approved')
           .order('created_at', { ascending: true }),
         supabase
           .from('evidence_candidates')

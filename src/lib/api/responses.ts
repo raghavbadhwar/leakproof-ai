@@ -27,6 +27,10 @@ export function handleApiError(error: unknown): NextResponse {
       return jsonError('That finding status change is not allowed.', 409);
     }
 
+    if (error.message === 'approved_evidence_required') {
+      return jsonError('Approve at least one attached evidence item before exporting this finding.', 409);
+    }
+
     if (error.message === 'invalid_last_owner') {
       return jsonError('Every organization must keep at least one owner.', 409);
     }

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="LeakProof AI">
+  <rect width="64" height="64" rx="14" fill="#0f6b4f"/>
+  <path d="M18 45V17h8v21h20v7H18Z" fill="#f8faf7"/>
+  <path d="M35 17h8v17h-8V17Z" fill="#d6f0de"/>
+</svg>

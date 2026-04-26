@@ -15,7 +15,7 @@ export async function GET(request: Request) {
 
     const { data, error } = await supabase
       .from('source_documents')
-      .select('id, document_type, file_name, mime_type, size_bytes, parse_status, chunking_status, embedding_status, created_at')
+      .select('id, customer_id, document_type, file_name, mime_type, size_bytes, parse_status, chunking_status, embedding_status, created_at, customers(id, name, external_id, domain)')
       .eq('organization_id', query.organization_id)
       .eq('workspace_id', query.workspace_id)
       .order('created_at', { ascending: false });

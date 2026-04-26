@@ -31,6 +31,14 @@ describe('audit event helpers', () => {
     expect(shouldWriteAuditEvent('semantic_search.ran')).toBe(true);
     expect(shouldWriteAuditEvent('evidence_candidate.approved')).toBe(true);
     expect(shouldWriteAuditEvent('report.exported')).toBe(true);
+    expect(shouldWriteAuditEvent('customer.assignment_changed')).toBe(true);
+    expect(shouldWriteAuditEvent('extraction_run_started')).toBe(true);
+    expect(shouldWriteAuditEvent('extraction_run_completed')).toBe(true);
+    expect(shouldWriteAuditEvent('extraction_run_failed')).toBe(true);
+    expect(shouldWriteAuditEvent('reconciliation_run_started')).toBe(true);
+    expect(shouldWriteAuditEvent('reconciliation_run_completed')).toBe(true);
+    expect(shouldWriteAuditEvent('reconciliation_run_failed')).toBe(true);
+    expect(shouldWriteAuditEvent('run_superseded')).toBe(true);
     expect(shouldWriteAuditEvent('view.loaded')).toBe(false);
   });
 });

@@ -30,6 +30,13 @@ export function excerptForEvidence(content: string, maxLength = 500): string {
   return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
 }
 
+export function isEvidenceCandidateExportReady(candidate: {
+  approval_state?: string | null;
+  attached_evidence_item_id?: string | null;
+}): boolean {
+  return candidate.approval_state === 'approved' && Boolean(candidate.attached_evidence_item_id);
+}
+
 function sourceTypeForDocument(documentType: SourceDocumentType | string): Citation['sourceType'] {
   if (documentType === 'contract') return 'contract';
   if (documentType === 'invoice_csv') return 'invoice';

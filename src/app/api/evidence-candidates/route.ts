@@ -94,6 +94,7 @@ async function assertFindingAndChunkBelongToWorkspace(
       .eq('id', input.finding_id)
       .eq('organization_id', input.organization_id)
       .eq('workspace_id', input.workspace_id)
+      .eq('is_active', true)
       .maybeSingle(),
     supabase
       .from('document_chunks')

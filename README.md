@@ -199,6 +199,7 @@ LeakProof AI handles sensitive contracts and invoices, so the build follows thes
 ## Important Docs
 
 - `CHATGPT_CONTEXT/README.md`: fastest AI-readable entry point.
+- `docs/FEATURE_LIST.md`: full-app feature list with implementation status.
 - `docs/PRD.md`: product requirements.
 - `docs/TECHNICAL_ARCHITECTURE.md`: system architecture.
 - `docs/DATA_MODEL.md`: table/status/money model summary.

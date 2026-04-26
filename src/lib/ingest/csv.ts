@@ -10,6 +10,13 @@ export type IngestedInvoiceRecord = {
   workspaceId: string;
   customerExternalId: string;
   customerName: string;
+  customerSegment?: string;
+  billingModel?: string;
+  contractType?: string;
+  contractValueMinor?: number;
+  renewalDate?: string;
+  ownerLabel?: string;
+  domain?: string;
   invoiceId: string;
   invoiceDate: string;
   lineItem: string;
@@ -17,6 +24,10 @@ export type IngestedInvoiceRecord = {
   unitPriceMinor?: number;
   amountMinor: number;
   currency: string;
+  productLabel?: string;
+  teamLabel?: string;
+  servicePeriodStart?: string;
+  servicePeriodEnd?: string;
   citation: Citation;
 };
 
@@ -25,11 +36,33 @@ export type IngestedUsageRecord = {
   workspaceId: string;
   customerExternalId: string;
   customerName: string;
+  customerSegment?: string;
+  billingModel?: string;
+  contractType?: string;
+  contractValueMinor?: number;
+  renewalDate?: string;
+  ownerLabel?: string;
+  domain?: string;
   periodStart: string;
   periodEnd: string;
   metricName: string;
   quantity: number;
+  productLabel?: string;
+  teamLabel?: string;
   citation: Citation;
+};
+
+export type IngestedCustomerRecord = {
+  customerExternalId: string;
+  customerName: string;
+  customerSegment?: string;
+  billingModel?: string;
+  contractType?: string;
+  contractValueMinor?: number;
+  currency?: string;
+  renewalDate?: string;
+  ownerLabel?: string;
+  domain?: string;
 };
 
 export function parseInvoiceCsv(csv: string, context: CsvParseContext): IngestedInvoiceRecord[] {
@@ -49,6 +82,13 @@ export function parseInvoiceCsv(csv: string, context: CsvParseContext): Ingested
     workspaceId: context.workspaceId,
     customerExternalId: required(row, 'customer_external_id', index + 2),
     customerName: required(row, 'customer_name', index + 2),
+    customerSegment: optionalText(row.segment),
+    billingModel: optionalText(row.billing_model),
+    contractType: optionalText(row.contract_type),
+    contractValueMinor: optionalMoney(row.contract_value, 'contract_value', index + 2),
+    renewalDate: optionalDate(row.renewal_date, 'renewal_date', index + 2),
+    ownerLabel: optionalText(row.owner_label),
+    domain: optionalText(row.domain),
     invoiceId: required(row, 'invoice_id', index + 2),
     invoiceDate: requiredDate(row, 'invoice_date', index + 2),
     lineItem: required(row, 'line_item', index + 2),
@@ -56,6 +96,10 @@ export function parseInvoiceCsv(csv: string, context: CsvParseContext): Ingested
     unitPriceMinor: optionalMoney(row.unit_price, 'unit_price', index + 2),
     amountMinor: parseMoneyToMinorUnits(required(row, 'amount', index + 2), `amount on row ${index + 2}`),
     currency: required(row, 'currency', index + 2).toUpperCase(),
+    productLabel: optionalText(row.product_label),
+    teamLabel: optionalText(row.team_label),
+    servicePeriodStart: optionalDate(row.service_period_start, 'service_period_start', index + 2),
+    servicePeriodEnd: optionalDate(row.service_period_end, 'service_period_end', index + 2),
     citation: {
       sourceType: 'invoice',
       sourceId: stableRowId('invoice', context.sourceDocumentId, index + 2),
@@ -80,15 +124,42 @@ export function parseUsageCsv(csv: string, context: CsvParseContext): IngestedUs
     workspaceId: context.workspaceId,
     customerExternalId: required(row, 'customer_external_id', index + 2),
     customerName: required(row, 'customer_name', index + 2),
+    customerSegment: optionalText(row.segment),
+    billingModel: optionalText(row.billing_model),
+    contractType: optionalText(row.contract_type),
+    contractValueMinor: optionalMoney(row.contract_value, 'contract_value', index + 2),
+    renewalDate: optionalDate(row.renewal_date, 'renewal_date', index + 2),
+    ownerLabel: optionalText(row.owner_label),
+    domain: optionalText(row.domain),
     periodStart: requiredDate(row, 'period_start', index + 2),
     periodEnd: requiredDate(row, 'period_end', index + 2),
     metricName: required(row, 'metric_name', index + 2),
     quantity: parseNumber(required(row, 'quantity', index + 2), `quantity on row ${index + 2}`),
+    productLabel: optionalText(row.product_label),
+    teamLabel: optionalText(row.team_label),
     citation: {
       sourceType: 'usage',
       sourceId: stableRowId('usage', context.sourceDocumentId, index + 2),
       label: `usage.csv row ${index + 2}`
     }
+  }));
+}
+
+export function parseCustomerCsv(csv: string): IngestedCustomerRecord[] {
+  const rows = parseCsv(csv);
+  assertHeaders(rows.headers, ['customer_external_id', 'customer_name']);
+
+  return rows.records.map((row, index) => ({
+    customerExternalId: required(row, 'customer_external_id', index + 2),
+    customerName: required(row, 'customer_name', index + 2),
+    customerSegment: optionalText(row.segment),
+    billingModel: optionalText(row.billing_model),
+    contractType: optionalText(row.contract_type),
+    contractValueMinor: optionalMoney(row.contract_value, 'contract_value', index + 2),
+    currency: optionalText(row.currency)?.toUpperCase(),
+    renewalDate: optionalDate(row.renewal_date, 'renewal_date', index + 2),
+    ownerLabel: optionalText(row.owner_label),
+    domain: optionalText(row.domain)
   }));
 }
 
@@ -167,6 +238,19 @@ function required(row: Record<string, string>, field: string, rowNumber: number)
 
 function requiredDate(row: Record<string, string>, field: string, rowNumber: number): string {
   const value = required(row, field, rowNumber);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+    throw new Error(`CSV row ${rowNumber} has invalid ${field}.`);
+  }
+  return value;
+}
+
+function optionalText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function optionalDate(value: string | undefined, field: string, rowNumber: number): string | undefined {
+  if (!value?.trim()) return undefined;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
     throw new Error(`CSV row ${rowNumber} has invalid ${field}.`);
   }

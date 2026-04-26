@@ -13,12 +13,20 @@ export type AuditEventType =
   | 'extraction.started'
   | 'extraction.completed'
   | 'extraction.failed'
+  | 'extraction_run_started'
+  | 'extraction_run_completed'
+  | 'extraction_run_failed'
   | 'term.approved'
   | 'term.edited'
   | 'term.rejected'
   | 'term.needs_review'
+  | 'customer.assignment_changed'
   | 'reconciliation.started'
   | 'reconciliation.completed'
+  | 'reconciliation_run_started'
+  | 'reconciliation_run_completed'
+  | 'reconciliation_run_failed'
+  | 'run_superseded'
   | 'finding.created'
   | 'finding.approved'
   | 'finding.exported'
@@ -47,12 +55,20 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'extraction.started',
   'extraction.completed',
   'extraction.failed',
+  'extraction_run_started',
+  'extraction_run_completed',
+  'extraction_run_failed',
   'term.approved',
   'term.edited',
   'term.rejected',
   'term.needs_review',
+  'customer.assignment_changed',
   'reconciliation.started',
   'reconciliation.completed',
+  'reconciliation_run_started',
+  'reconciliation_run_completed',
+  'reconciliation_run_failed',
+  'run_superseded',
   'finding.created',
   'finding.approved',
   'finding.exported',
