@@ -1,13 +1,27 @@
 import type { ContractTerm, InvoiceRecord, LeakageFinding, UsageRecord } from './types';
 
-function approvedTerm<T>(terms: ContractTerm[], customerId: string, type: ContractTerm['type']): (ContractTerm & { value: T }) | undefined {
-  return terms.find((term) => term.customerId === customerId && term.type === type && ['approved', 'edited'].includes(term.reviewStatus)) as (ContractTerm & { value: T }) | undefined;
-}
+type BillingFrequency = 'monthly' | 'quarterly' | 'annual' | 'one_time';
 
-function sumInvoicesForCustomer(invoices: InvoiceRecord[], customerId: string): number {
-  return invoices
-    .filter((invoice) => invoice.customerId === customerId)
-    .reduce((sum, invoice) => sum + invoice.amountMinor, 0);
+type BillingPeriod = {
+  key: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+};
+
+type PeriodAmount = {
+  period: BillingPeriod;
+  amountMinor: number;
+  invoices: InvoiceRecord[];
+};
+
+const APPROVED_STATUSES: Array<ContractTerm['reviewStatus']> = ['approved', 'edited'];
+const MS_PER_DAY = 86_400_000;
+
+function approvedTerm<T>(terms: ContractTerm[], customerId: string, type: ContractTerm['type']): (ContractTerm & { value: T }) | undefined {
+  return terms.find((term) => term.customerId === customerId && term.type === type && APPROVED_STATUSES.includes(term.reviewStatus)) as
+    | (ContractTerm & { value: T })
+    | undefined;
 }
 
 export function findMinimumCommitmentShortfall(input: {
@@ -15,26 +29,42 @@ export function findMinimumCommitmentShortfall(input: {
   terms: ContractTerm[];
   invoices: InvoiceRecord[];
 }): LeakageFinding | null {
-  const minimum = approvedTerm<{ amountMinor: number; currency: string }>(input.terms, input.customerId, 'minimum_commitment');
-  if (!minimum) return null;
+  const minimum = approvedTerm<{ amountMinor: number; currency: string; frequency?: string; period?: string; billingFrequency?: string }>(
+    input.terms,
+    input.customerId,
+    'minimum_commitment'
+  );
+  if (!minimum || !isIntegerMoney(minimum.value.amountMinor)) return null;
 
-  const customerInvoices = input.invoices.filter((invoice) => invoice.customerId === input.customerId);
+  const frequency = billingFrequencyFor(input.terms, input.customerId, [minimum.value], 'monthly');
+  const contractStart = approvedTerm<{ date: string }>(input.terms, input.customerId, 'contract_start_date');
+  const customerInvoices = input.invoices.filter(
+    (invoice) => invoice.customerId === input.customerId && invoice.currency === minimum.value.currency && isIntegerMoney(invoice.amountMinor)
+  );
   if (customerInvoices.length === 0) return null;
 
-  const invoiceCurrency = customerInvoices[0]?.currency;
-  if (!invoiceCurrency || invoiceCurrency !== minimum.value.currency) return null;
+  const periodAmounts = groupInvoiceAmountsByPeriod(customerInvoices, frequency, contractStart?.value.date);
+  const periodShortfalls = periodAmounts
+    .map((bucket) => ({
+      period: bucket.period,
+      invoicedAmountMinor: bucket.amountMinor,
+      shortfallMinor: minimum.value.amountMinor - bucket.amountMinor,
+      invoiceIds: bucket.invoices.map((invoice) => invoice.id)
+    }))
+    .filter((row) => row.shortfallMinor > 0);
 
-  const invoicedAmountMinor = sumInvoicesForCustomer(input.invoices, input.customerId);
-  const shortfallMinor = minimum.value.amountMinor - invoicedAmountMinor;
+  if (periodShortfalls.length === 0) return null;
 
-  if (shortfallMinor <= 0) return null;
+  const shortfallMinor = sumMinor(periodShortfalls.map((row) => row.shortfallMinor));
+  const shortfallInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
+  const citedInvoices = customerInvoices.filter((invoice) => shortfallInvoiceIds.has(invoice.id));
 
   return {
     id: `finding_minimum_${input.customerId}`,
     customerId: input.customerId,
     type: 'minimum_commitment_shortfall',
     title: 'Invoice total is below contractual minimum commitment',
-    summary: `The approved minimum commitment is ${minimum.value.currency} ${minimum.value.amountMinor / 100}, but invoices total ${minimum.value.currency} ${invoicedAmountMinor / 100}.`,
+    summary: `The approved ${frequencyLabel(frequency)} minimum commitment was underbilled in ${periodShortfalls.length} billing period(s).`,
     outcomeType: 'recoverable_leakage',
     estimatedAmount: {
       amountMinor: shortfallMinor,
@@ -43,12 +73,14 @@ export function findMinimumCommitmentShortfall(input: {
     confidence: Math.min(0.95, minimum.confidence),
     status: 'draft',
     calculation: {
-      formula: 'minimum_commitment - invoiced_amount',
+      formula: 'period_minimum_commitment - period_invoiced_amount',
+      financeAssumption: 'Billing periods do not offset each other unless an approved carry-forward term exists.',
+      billingFrequency: frequency,
       minimumCommitmentMinor: minimum.value.amountMinor,
-      invoicedAmountMinor,
+      periodShortfalls,
       shortfallMinor
     },
-    citations: [minimum.citation, ...customerInvoices.map((invoice) => invoice.citation)]
+    citations: [minimum.citation, ...citedInvoices.map((invoice) => invoice.citation)]
   };
 }
 
@@ -58,36 +90,72 @@ export function findUsageOverageUnbilled(input: {
   usage: UsageRecord[];
   invoices: InvoiceRecord[];
 }): LeakageFinding | null {
-  const allowance = approvedTerm<{ metricName: string; quantity: number }>(input.terms, input.customerId, 'usage_allowance');
-  const overagePrice = approvedTerm<{ amountMinor: number; currency: string; metricName: string }>(input.terms, input.customerId, 'overage_price');
+  const allowance = approvedTerm<{ metricName: string; quantity: number; frequency?: string; period?: string }>(
+    input.terms,
+    input.customerId,
+    'usage_allowance'
+  );
+  const overagePrice = approvedTerm<{ amountMinor: number; currency: string; metricName: string; frequency?: string; period?: string }>(
+    input.terms,
+    input.customerId,
+    'overage_price'
+  );
 
-  if (!allowance || !overagePrice) return null;
+  if (!allowance || !overagePrice || !isIntegerMoney(overagePrice.value.amountMinor)) return null;
   if (allowance.value.metricName !== overagePrice.value.metricName) return null;
 
+  const frequency = billingFrequencyFor(input.terms, input.customerId, [allowance.value, overagePrice.value], 'monthly');
+  const contractStart = approvedTerm<{ date: string }>(input.terms, input.customerId, 'contract_start_date');
   const relevantUsage = input.usage.filter(
     (row) => row.customerId === input.customerId && row.metricName === allowance.value.metricName
   );
   if (relevantUsage.length === 0) return null;
 
-  const totalUsage = relevantUsage.reduce((sum, row) => sum + row.quantity, 0);
-  const overageQuantity = totalUsage - allowance.value.quantity;
-  if (overageQuantity <= 0) return null;
-
-  const expectedOverageMinor = Math.round(overageQuantity * overagePrice.value.amountMinor);
+  const usageByPeriod = groupUsageByPeriod(relevantUsage, frequency, contractStart?.value.date);
   const overageInvoiceRows = input.invoices.filter(
-    (invoice) => invoice.customerId === input.customerId && /overage|usage/i.test(invoice.lineItem)
+    (invoice) =>
+      invoice.customerId === input.customerId &&
+      invoice.currency === overagePrice.value.currency &&
+      isIntegerMoney(invoice.amountMinor) &&
+      /overage|usage/i.test(invoice.lineItem)
   );
-  const billedOverageMinor = overageInvoiceRows.reduce((sum, invoice) => sum + invoice.amountMinor, 0);
-  const unbilledMinor = expectedOverageMinor - billedOverageMinor;
+  const billedOverageByPeriod = groupInvoiceAmountsByPeriod(overageInvoiceRows, frequency, contractStart?.value.date);
+  const billedByKey = new Map(billedOverageByPeriod.map((bucket) => [bucket.period.key, bucket]));
 
-  if (unbilledMinor <= 0) return null;
+  const periodShortfalls = Array.from(usageByPeriod.values())
+    .map((bucket) => {
+      const overageQuantity = bucket.quantity - allowance.value.quantity;
+      const expectedOverageMinor = overageQuantity > 0 ? multiplyMinorByDecimalQuantity(overagePrice.value.amountMinor, overageQuantity) : 0;
+      const billedBucket = billedByKey.get(bucket.period.key);
+      const billedOverageMinor = billedBucket?.amountMinor ?? 0;
+      return {
+        period: bucket.period,
+        totalUsage: bucket.quantity,
+        allowance: allowance.value.quantity,
+        overageQuantity,
+        expectedOverageMinor,
+        billedOverageMinor,
+        unbilledMinor: expectedOverageMinor - billedOverageMinor,
+        usageIds: bucket.rows.map((row) => row.id),
+        invoiceIds: billedBucket?.invoices.map((invoice) => invoice.id) ?? []
+      };
+    })
+    .filter((row) => row.overageQuantity > 0 && row.unbilledMinor > 0);
+
+  if (periodShortfalls.length === 0) return null;
+
+  const unbilledMinor = sumMinor(periodShortfalls.map((row) => row.unbilledMinor));
+  const citedUsageIds = new Set(periodShortfalls.flatMap((row) => row.usageIds));
+  const citedInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
+  const citedUsage = relevantUsage.filter((row) => citedUsageIds.has(row.id));
+  const citedInvoices = overageInvoiceRows.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
   return {
     id: `finding_usage_${input.customerId}`,
     customerId: input.customerId,
     type: 'usage_overage_unbilled',
     title: 'Usage exceeded allowance without full overage billing',
-    summary: `Usage exceeded the allowance by ${overageQuantity} ${allowance.value.metricName}.`,
+    summary: `Usage exceeded the allowance in ${periodShortfalls.length} billing period(s).`,
     outcomeType: 'recoverable_leakage',
     estimatedAmount: {
       amountMinor: unbilledMinor,
@@ -96,16 +164,14 @@ export function findUsageOverageUnbilled(input: {
     confidence: Math.min(0.92, allowance.confidence, overagePrice.confidence),
     status: 'draft',
     calculation: {
-      formula: '(usage - allowance) * overage_price - billed_overage',
-      totalUsage,
-      allowance: allowance.value.quantity,
-      overageQuantity,
+      formula: 'sum_by_period(max(usage - allowance, 0) * overage_price - billed_overage)',
+      financeAssumption: 'Overage is reconciled per billing period; another period cannot offset an unbilled overage.',
+      billingFrequency: frequency,
       overagePriceMinor: overagePrice.value.amountMinor,
-      expectedOverageMinor,
-      billedOverageMinor,
+      periodShortfalls,
       unbilledMinor
     },
-    citations: [allowance.citation, overagePrice.citation, ...relevantUsage.map((row) => row.citation), ...overageInvoiceRows.map((row) => row.citation)]
+    citations: [allowance.citation, overagePrice.citation, ...citedUsage.map((row) => row.citation), ...citedInvoices.map((row) => row.citation)]
   };
 }
 
@@ -115,34 +181,61 @@ export function findSeatUnderbilling(input: {
   usage: UsageRecord[];
   invoices: InvoiceRecord[];
 }): LeakageFinding | null {
-  const seatPrice = approvedTerm<{ amountMinor: number; currency: string }>(input.terms, input.customerId, 'seat_price');
-  if (!seatPrice) return null;
+  const seatPrice = approvedTerm<{ amountMinor: number; currency: string; frequency?: string; period?: string }>(
+    input.terms,
+    input.customerId,
+    'seat_price'
+  );
+  if (!seatPrice || !isIntegerMoney(seatPrice.value.amountMinor)) return null;
 
+  const frequency = billingFrequencyFor(input.terms, input.customerId, [seatPrice.value], 'monthly');
+  const contractStart = approvedTerm<{ date: string }>(input.terms, input.customerId, 'contract_start_date');
   const seatUsage = input.usage.filter((row) => row.customerId === input.customerId && /seat|user|license/i.test(row.metricName));
   if (seatUsage.length === 0) return null;
 
   const seatInvoiceRows = input.invoices.filter(
-    (invoice) => invoice.customerId === input.customerId && /seat|user|license/i.test(invoice.lineItem)
+    (invoice) =>
+      invoice.customerId === input.customerId &&
+      invoice.currency === seatPrice.value.currency &&
+      /seat|user|license/i.test(invoice.lineItem)
   );
   if (seatInvoiceRows.length === 0) return null;
 
-  const invoiceCurrency = seatInvoiceRows[0]?.currency;
-  if (!invoiceCurrency || invoiceCurrency !== seatPrice.value.currency) return null;
+  const usageByPeriod = groupUsageByPeriod(seatUsage, frequency, contractStart?.value.date);
+  const invoiceQuantityByPeriod = groupInvoiceQuantitiesByPeriod(seatInvoiceRows, frequency, contractStart?.value.date);
 
-  const actualSeats = Math.max(...seatUsage.map((row) => row.quantity));
-  const billedSeats = seatInvoiceRows.reduce((sum, invoice) => sum + (invoice.quantity ?? 0), 0);
-  const missingSeats = actualSeats - billedSeats;
+  const periodShortfalls = Array.from(usageByPeriod.values())
+    .map((bucket) => {
+      const actualSeats = Math.max(...bucket.rows.map((row) => row.quantity));
+      const billedBucket = invoiceQuantityByPeriod.get(bucket.period.key);
+      const billedSeats = billedBucket?.quantity ?? 0;
+      const missingSeats = actualSeats - billedSeats;
+      return {
+        period: bucket.period,
+        actualSeats,
+        billedSeats,
+        missingSeats,
+        unbilledMinor: missingSeats > 0 ? multiplyMinorByDecimalQuantity(seatPrice.value.amountMinor, missingSeats) : 0,
+        usageIds: bucket.rows.map((row) => row.id),
+        invoiceIds: billedBucket?.invoices.map((invoice) => invoice.id) ?? []
+      };
+    })
+    .filter((row) => row.missingSeats > 0 && row.invoiceIds.length > 0);
 
-  if (missingSeats <= 0) return null;
+  if (periodShortfalls.length === 0) return null;
 
-  const unbilledMinor = Math.round(missingSeats * seatPrice.value.amountMinor);
+  const unbilledMinor = sumMinor(periodShortfalls.map((row) => row.unbilledMinor));
+  const citedUsageIds = new Set(periodShortfalls.flatMap((row) => row.usageIds));
+  const citedInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
+  const citedUsage = seatUsage.filter((row) => citedUsageIds.has(row.id));
+  const citedInvoices = seatInvoiceRows.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
   return {
     id: `finding_seats_${input.customerId}`,
     customerId: input.customerId,
     type: 'seat_underbilling',
     title: 'Actual seats exceed billed seats',
-    summary: `${actualSeats} seats were observed, but only ${billedSeats} seats were billed.`,
+    summary: `Actual seats exceeded billed seats in ${periodShortfalls.length} billing period(s).`,
     outcomeType: 'recoverable_leakage',
     estimatedAmount: {
       amountMinor: unbilledMinor,
@@ -151,14 +244,14 @@ export function findSeatUnderbilling(input: {
     confidence: Math.min(0.9, seatPrice.confidence),
     status: 'draft',
     calculation: {
-      formula: '(actual_seats - billed_seats) * seat_price',
-      actualSeats,
-      billedSeats,
-      missingSeats,
+      formula: 'sum_by_period((actual_seats - billed_seats) * seat_price)',
+      financeAssumption: 'Seat counts are reconciled inside each service period; later invoices do not cure earlier underbilling.',
+      billingFrequency: frequency,
       seatPriceMinor: seatPrice.value.amountMinor,
+      periodShortfalls,
       unbilledMinor
     },
-    citations: [seatPrice.citation, ...seatUsage.map((row) => row.citation), ...seatInvoiceRows.map((row) => row.citation)]
+    citations: [seatPrice.citation, ...citedUsage.map((row) => row.citation), ...citedInvoices.map((row) => row.citation)]
   };
 }
 
@@ -171,14 +264,16 @@ export function findExpiredDiscountStillApplied(input: {
   const discountExpiry = approvedTerm<{ date: string }>(input.terms, input.customerId, 'discount_expiry');
   if (!discount || !discountExpiry) return null;
 
-  const expiryTime = Date.parse(`${discountExpiry.value.date}T00:00:00Z`);
-  if (Number.isNaN(expiryTime)) return null;
+  const expiryDate = parseUtcDate(discountExpiry.value.date);
+  if (!expiryDate) return null;
 
   const discountRows = input.invoices.filter((invoice) => {
-    const invoiceTime = Date.parse(`${invoice.invoiceDate}T00:00:00Z`);
+    const invoiceEffectiveDate = parseUtcDate(invoicePeriodDate(invoice));
     return (
       invoice.customerId === input.customerId &&
-      invoiceTime > expiryTime &&
+      invoiceEffectiveDate !== null &&
+      invoiceEffectiveDate.getTime() > expiryDate.getTime() &&
+      isIntegerMoney(invoice.amountMinor) &&
       (invoice.amountMinor < 0 || /discount|promo|promotional/i.test(invoice.lineItem))
     );
   });
@@ -186,9 +281,9 @@ export function findExpiredDiscountStillApplied(input: {
   if (discountRows.length === 0) return null;
 
   const invoiceCurrency = discountRows[0]?.currency;
-  if (!invoiceCurrency) return null;
+  if (!invoiceCurrency || discountRows.some((row) => row.currency !== invoiceCurrency)) return null;
 
-  const stillAppliedMinor = discountRows.reduce((sum, invoice) => sum + Math.abs(invoice.amountMinor), 0);
+  const stillAppliedMinor = sumMinor(discountRows.map((invoice) => Math.abs(invoice.amountMinor)));
   if (stillAppliedMinor <= 0) return null;
 
   return {
@@ -197,7 +292,7 @@ export function findExpiredDiscountStillApplied(input: {
     type: 'expired_discount_still_applied',
     title: 'Expired discount still appears on invoices',
     summary: `A ${discount.value.percent}% discount expired on ${discountExpiry.value.date}, but discount invoice rows still appear after that date.`,
-    outcomeType: 'prevented_future_leakage',
+    outcomeType: 'recoverable_leakage',
     estimatedAmount: {
       amountMinor: stillAppliedMinor,
       currency: invoiceCurrency
@@ -206,6 +301,7 @@ export function findExpiredDiscountStillApplied(input: {
     status: 'draft',
     calculation: {
       formula: 'sum(abs(discount_invoice_rows_after_expiry))',
+      financeAssumption: 'A discount row with a service period start after expiry is treated as recoverable leakage.',
       discountPercent: discount.value.percent,
       expiryDate: discountExpiry.value.date,
       stillAppliedMinor
@@ -219,32 +315,46 @@ export function findMissedAnnualUplift(input: {
   terms: ContractTerm[];
   invoices: InvoiceRecord[];
 }): LeakageFinding | null {
-  const baseFee = approvedTerm<{ amountMinor: number; currency: string }>(input.terms, input.customerId, 'base_fee');
+  const baseFee = approvedTerm<{ amountMinor: number; currency: string; frequency?: string; period?: string }>(input.terms, input.customerId, 'base_fee');
   const contractStart = approvedTerm<{ date: string }>(input.terms, input.customerId, 'contract_start_date');
   const annualUplift = approvedTerm<{ percent: number }>(input.terms, input.customerId, 'annual_uplift');
-  if (!baseFee || !contractStart || !annualUplift) return null;
+  if (!baseFee || !contractStart || !annualUplift || !isIntegerMoney(baseFee.value.amountMinor)) return null;
 
   const anniversary = addYears(contractStart.value.date, 1);
   if (!anniversary) return null;
 
+  const frequency = billingFrequencyFor(input.terms, input.customerId, [baseFee.value], 'monthly');
   const postAnniversaryInvoices = input.invoices.filter((invoice) => {
-    const invoiceTime = Date.parse(`${invoice.invoiceDate}T00:00:00Z`);
-    return invoice.customerId === input.customerId && invoiceTime >= anniversary.getTime() && /platform|subscription|fee/i.test(invoice.lineItem);
+    const invoiceEffectiveDate = parseUtcDate(invoicePeriodDate(invoice));
+    return (
+      invoice.customerId === input.customerId &&
+      invoice.currency === baseFee.value.currency &&
+      invoiceEffectiveDate !== null &&
+      invoiceEffectiveDate.getTime() >= anniversary.getTime() &&
+      isIntegerMoney(invoice.amountMinor) &&
+      /platform|subscription|fee/i.test(invoice.lineItem)
+    );
   });
 
   if (postAnniversaryInvoices.length === 0) return null;
 
-  const expectedAmountMinor = Math.round(baseFee.value.amountMinor * (1 + annualUplift.value.percent / 100));
-  const shortfalls = postAnniversaryInvoices
-    .map((invoice) => ({
-      invoice,
-      shortfallMinor: expectedAmountMinor - invoice.amountMinor
+  const expectedAmountMinor = applyPercentIncreaseMinor(baseFee.value.amountMinor, annualUplift.value.percent);
+  const periodAmounts = groupInvoiceAmountsByPeriod(postAnniversaryInvoices, frequency, contractStart.value.date);
+  const periodShortfalls = periodAmounts
+    .map((bucket) => ({
+      period: bucket.period,
+      expectedAmountMinor,
+      invoicedAmountMinor: bucket.amountMinor,
+      shortfallMinor: expectedAmountMinor - bucket.amountMinor,
+      invoiceIds: bucket.invoices.map((invoice) => invoice.id)
     }))
-    .filter((row) => row.shortfallMinor > 0 && row.invoice.currency === baseFee.value.currency);
+    .filter((row) => row.shortfallMinor > 0);
 
-  if (shortfalls.length === 0) return null;
+  if (periodShortfalls.length === 0) return null;
 
-  const missedUpliftMinor = shortfalls.reduce((sum, row) => sum + row.shortfallMinor, 0);
+  const missedUpliftMinor = sumMinor(periodShortfalls.map((row) => row.shortfallMinor));
+  const citedInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
+  const citedInvoices = postAnniversaryInvoices.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
   return {
     id: `finding_uplift_${input.customerId}`,
@@ -260,17 +370,20 @@ export function findMissedAnnualUplift(input: {
     confidence: Math.min(0.88, baseFee.confidence, contractStart.confidence, annualUplift.confidence),
     status: 'draft',
     calculation: {
-      formula: 'expected_post_uplift_fee - invoiced_fee',
+      formula: 'sum_by_period(expected_post_uplift_fee - invoiced_fee)',
+      financeAssumption: 'Annual uplift is applied to each post-anniversary billing period.',
+      billingFrequency: frequency,
       baseFeeMinor: baseFee.value.amountMinor,
       upliftPercent: annualUplift.value.percent,
       expectedAmountMinor,
+      periodShortfalls,
       missedUpliftMinor
     },
     citations: [
       baseFee.citation,
       contractStart.citation,
       annualUplift.citation,
-      ...shortfalls.map((row) => row.invoice.citation)
+      ...citedInvoices.map((row) => row.citation)
     ]
   };
 }
@@ -290,7 +403,7 @@ export function findRenewalWindowRisk(input: {
 
   const noticeDeadline = new Date(endDate);
   noticeDeadline.setUTCDate(noticeDeadline.getUTCDate() - noticePeriod.value.days);
-  const daysUntilDeadline = Math.ceil((noticeDeadline.getTime() - asOfDate.getTime()) / 86_400_000);
+  const daysUntilDeadline = Math.ceil((noticeDeadline.getTime() - asOfDate.getTime()) / MS_PER_DAY);
   if (daysUntilDeadline > 30) return null;
 
   return {
@@ -317,6 +430,53 @@ export function findRenewalWindowRisk(input: {
   };
 }
 
+export function findPaymentTermsMismatch(input: {
+  customerId: string;
+  terms: ContractTerm[];
+  invoices: InvoiceRecord[];
+}): LeakageFinding | null {
+  const paymentTerms = approvedTerm<{ days?: number; netDays?: number; dueDays?: number } | string>(
+    input.terms,
+    input.customerId,
+    'payment_terms'
+  );
+  if (!paymentTerms) return null;
+
+  const expectedDays = paymentTermDays(paymentTerms.value);
+  if (expectedDays === null) return null;
+
+  const mismatchedInvoices = input.invoices
+    .filter((invoice) => invoice.customerId === input.customerId)
+    .map((invoice) => ({ invoice, invoiceDays: invoicePaymentTermsDays(invoice) }))
+    .filter((row) => row.invoiceDays !== null && row.invoiceDays !== expectedDays);
+
+  if (mismatchedInvoices.length === 0) return null;
+
+  return {
+    id: `finding_payment_terms_${input.customerId}`,
+    customerId: input.customerId,
+    type: 'payment_terms_mismatch',
+    title: 'Invoice payment terms do not match the contract',
+    summary: `Contract payment terms are Net ${expectedDays}, but ${mismatchedInvoices.length} invoice row(s) reference different terms.`,
+    outcomeType: 'risk_alert',
+    estimatedAmount: {
+      amountMinor: 0,
+      currency: mismatchedInvoices[0]?.invoice.currency ?? 'USD'
+    },
+    confidence: Math.min(0.84, paymentTerms.confidence),
+    status: 'needs_review',
+    calculation: {
+      formula: 'invoice_payment_terms_days != contract_payment_terms_days',
+      contractPaymentTermsDays: expectedDays,
+      mismatches: mismatchedInvoices.map((row) => ({
+        invoiceId: row.invoice.invoiceId,
+        invoiceTermsDays: row.invoiceDays
+      }))
+    },
+    citations: [paymentTerms.citation, ...mismatchedInvoices.map((row) => row.invoice.citation)]
+  };
+}
+
 export function findAmendmentConflict(input: {
   customerId: string;
   terms: ContractTerm[];
@@ -328,7 +488,7 @@ export function findAmendmentConflict(input: {
     (term) =>
       term.customerId === input.customerId &&
       term.type === amendment.value.supersedes &&
-      ['approved', 'edited'].includes(term.reviewStatus)
+      APPROVED_STATUSES.includes(term.reviewStatus)
   );
   if (!original) return null;
 
@@ -367,13 +527,186 @@ export function reconcileLeakage(input: {
     findExpiredDiscountStillApplied(input),
     findMissedAnnualUplift(input),
     findRenewalWindowRisk(input),
+    findPaymentTermsMismatch(input),
     findAmendmentConflict(input)
   ].filter((finding): finding is LeakageFinding => Boolean(finding));
 }
 
+function billingFrequencyFor(
+  terms: ContractTerm[],
+  customerId: string,
+  candidates: unknown[],
+  fallback: BillingFrequency
+): BillingFrequency {
+  for (const candidate of candidates) {
+    const frequency = normalizeBillingFrequency(candidate);
+    if (frequency) return frequency;
+  }
+
+  const billingTerm = approvedTerm<unknown>(terms, customerId, 'billing_frequency');
+  return normalizeBillingFrequency(billingTerm?.value) ?? fallback;
+}
+
+function normalizeBillingFrequency(value: unknown): BillingFrequency | null {
+  if (typeof value === 'string') return normalizeFrequencyText(value);
+  if (!value || typeof value !== 'object') return null;
+
+  const record = value as Record<string, unknown>;
+  return (
+    normalizeFrequencyText(record.frequency) ??
+    normalizeFrequencyText(record.billingFrequency) ??
+    normalizeFrequencyText(record.billing_frequency) ??
+    normalizeFrequencyText(record.period) ??
+    null
+  );
+}
+
+function normalizeFrequencyText(value: unknown): BillingFrequency | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (['month', 'monthly', 'per_month'].includes(normalized)) return 'monthly';
+  if (['quarter', 'quarterly', 'per_quarter'].includes(normalized)) return 'quarterly';
+  if (['year', 'yearly', 'annual', 'annually', 'per_year'].includes(normalized)) return 'annual';
+  if (['one_time', 'oneoff', 'one_off', 'once'].includes(normalized)) return 'one_time';
+  return null;
+}
+
+function groupInvoiceAmountsByPeriod(invoices: InvoiceRecord[], frequency: BillingFrequency, contractStartDate?: string): PeriodAmount[] {
+  const buckets = new Map<string, PeriodAmount>();
+  for (const invoice of invoices) {
+    const period = periodForDate(invoicePeriodDate(invoice), frequency, contractStartDate);
+    if (!period) continue;
+
+    const bucket = buckets.get(period.key) ?? { period, amountMinor: 0, invoices: [] };
+    bucket.amountMinor = addMinor(bucket.amountMinor, invoice.amountMinor);
+    bucket.invoices.push(invoice);
+    buckets.set(period.key, bucket);
+  }
+
+  return Array.from(buckets.values()).sort((a, b) => a.period.startDate.localeCompare(b.period.startDate));
+}
+
+function groupInvoiceQuantitiesByPeriod(
+  invoices: InvoiceRecord[],
+  frequency: BillingFrequency,
+  contractStartDate?: string
+): Map<string, { period: BillingPeriod; quantity: number; invoices: InvoiceRecord[] }> {
+  const buckets = new Map<string, { period: BillingPeriod; quantity: number; invoices: InvoiceRecord[] }>();
+  for (const invoice of invoices) {
+    const period = periodForDate(invoicePeriodDate(invoice), frequency, contractStartDate);
+    if (!period) continue;
+
+    const bucket = buckets.get(period.key) ?? { period, quantity: 0, invoices: [] };
+    bucket.quantity += invoice.quantity ?? 0;
+    bucket.invoices.push(invoice);
+    buckets.set(period.key, bucket);
+  }
+  return buckets;
+}
+
+function groupUsageByPeriod(
+  usage: UsageRecord[],
+  frequency: BillingFrequency,
+  contractStartDate?: string
+): Map<string, { period: BillingPeriod; quantity: number; rows: UsageRecord[] }> {
+  const buckets = new Map<string, { period: BillingPeriod; quantity: number; rows: UsageRecord[] }>();
+  for (const row of usage) {
+    const period = periodForDate(row.periodStart, frequency, contractStartDate);
+    if (!period) continue;
+
+    const bucket = buckets.get(period.key) ?? { period, quantity: 0, rows: [] };
+    bucket.quantity += row.quantity;
+    bucket.rows.push(row);
+    buckets.set(period.key, bucket);
+  }
+  return buckets;
+}
+
+function invoicePeriodDate(invoice: InvoiceRecord): string {
+  return invoice.servicePeriodStart ?? invoice.servicePeriodEnd ?? invoice.invoiceDate;
+}
+
+function periodForDate(date: string, frequency: BillingFrequency, contractStartDate?: string): BillingPeriod | null {
+  const parsed = parseUtcDate(date);
+  if (!parsed) return null;
+
+  // Finance assumption: one-time charges are reconciled as one bucket because there is no recurring period to offset.
+  if (frequency === 'one_time') {
+    return { key: 'one_time', label: 'One-time', startDate: date, endDate: date };
+  }
+
+  if (frequency === 'monthly') {
+    const start = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, 0));
+    return periodFromDates('month', start, end);
+  }
+
+  if (frequency === 'quarterly') {
+    const quarterStartMonth = Math.floor(parsed.getUTCMonth() / 3) * 3;
+    const start = new Date(Date.UTC(parsed.getUTCFullYear(), quarterStartMonth, 1));
+    const end = new Date(Date.UTC(parsed.getUTCFullYear(), quarterStartMonth + 3, 0));
+    return periodFromDates('quarter', start, end);
+  }
+
+  const contractStart = contractStartDate ? parseUtcDate(contractStartDate) : null;
+  if (contractStart) {
+    const start = annualPeriodStartForDate(parsed, contractStart);
+    const end = new Date(start);
+    end.setUTCFullYear(end.getUTCFullYear() + 1);
+    end.setUTCDate(end.getUTCDate() - 1);
+    return periodFromDates('annual', start, end);
+  }
+
+  const start = new Date(Date.UTC(parsed.getUTCFullYear(), 0, 1));
+  const end = new Date(Date.UTC(parsed.getUTCFullYear(), 11, 31));
+  return periodFromDates('annual', start, end);
+}
+
+function periodFromDates(prefix: string, start: Date, end: Date): BillingPeriod {
+  const startDate = formatDate(start);
+  const endDate = formatDate(end);
+  return {
+    key: `${prefix}:${startDate}:${endDate}`,
+    label: `${startDate} to ${endDate}`,
+    startDate,
+    endDate
+  };
+}
+
+function annualPeriodStartForDate(date: Date, contractStart: Date): Date {
+  // Annual terms use the contract anniversary year when start-date evidence exists; otherwise callers use calendar years.
+  let start = new Date(Date.UTC(date.getUTCFullYear(), contractStart.getUTCMonth(), contractStart.getUTCDate()));
+  if (start.getTime() > date.getTime()) {
+    start = new Date(Date.UTC(date.getUTCFullYear() - 1, contractStart.getUTCMonth(), contractStart.getUTCDate()));
+  }
+  return start;
+}
+
+function paymentTermDays(value: { days?: number; netDays?: number; dueDays?: number } | string): number | null {
+  if (typeof value === 'string') return daysFromText(value);
+  return firstInteger(value.days, value.netDays, value.dueDays);
+}
+
+function invoicePaymentTermsDays(invoice: InvoiceRecord): number | null {
+  return firstInteger(invoice.paymentTermsDays) ?? daysFromText(invoice.lineItem);
+}
+
+function daysFromText(value: string): number | null {
+  const match = value.match(/\bnet\s*(\d{1,3})\b/i) ?? value.match(/\bdue\s*(?:in|within)?\s*(\d{1,3})\s*days?\b/i);
+  if (!match?.[1]) return null;
+  return Number.parseInt(match[1], 10);
+}
+
+function firstInteger(...values: Array<number | undefined>): number | null {
+  for (const value of values) {
+    if (value !== undefined && Number.isInteger(value) && value >= 0) return value;
+  }
+  return null;
+}
+
 function addYears(date: string, years: number): Date | null {
-  const parsed = new Date(`${date}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return null;
+  const parsed = parseUtcDate(date);
+  if (!parsed) return null;
   parsed.setUTCFullYear(parsed.getUTCFullYear() + years);
   return parsed;
 }
@@ -381,4 +714,60 @@ function addYears(date: string, years: number): Date | null {
 function parseUtcDate(date: string): Date | null {
   const parsed = new Date(`${date}T00:00:00Z`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function frequencyLabel(frequency: BillingFrequency): string {
+  if (frequency === 'one_time') return 'one-time';
+  return frequency;
+}
+
+function isIntegerMoney(amountMinor: number): boolean {
+  return Number.isSafeInteger(amountMinor);
+}
+
+function addMinor(left: number, right: number): number {
+  const sum = left + right;
+  if (!Number.isSafeInteger(sum)) {
+    throw new Error('Money calculation exceeded safe integer range.');
+  }
+  return sum;
+}
+
+function sumMinor(values: number[]): number {
+  return values.reduce((sum, value) => addMinor(sum, value), 0);
+}
+
+function multiplyMinorByDecimalQuantity(amountMinor: number, quantity: number): number {
+  const quantityText = String(quantity);
+  if (!/^-?\d+(\.\d+)?$/.test(quantityText)) return 0;
+  const [whole, fraction = ''] = quantityText.split('.');
+  const scale = 10n ** BigInt(fraction.length);
+  const units = BigInt(whole) * scale + BigInt(fraction || '0') * BigInt(quantity < 0 ? -1 : 1);
+  const numerator = BigInt(amountMinor) * units;
+  return Number(roundDiv(numerator, scale));
+}
+
+function applyPercentIncreaseMinor(amountMinor: number, percent: number): number {
+  const basisPoints = decimalPercentToBasisPoints(percent);
+  const upliftMinor = roundDiv(BigInt(amountMinor) * BigInt(basisPoints), 10_000n);
+  return Number(BigInt(amountMinor) + upliftMinor);
+}
+
+function decimalPercentToBasisPoints(percent: number): number {
+  const text = String(percent);
+  if (!/^-?\d+(\.\d+)?$/.test(text)) return 0;
+  const negative = text.startsWith('-');
+  const [whole, fraction = ''] = text.replace('-', '').split('.');
+  const padded = fraction.padEnd(2, '0').slice(0, 2);
+  const basisPoints = Number.parseInt(whole, 10) * 100 + Number.parseInt(padded || '0', 10);
+  return negative ? -basisPoints : basisPoints;
+}
+
+function roundDiv(numerator: bigint, denominator: bigint): bigint {
+  const half = denominator / 2n;
+  return numerator >= 0n ? (numerator + half) / denominator : (numerator - half) / denominator;
 }

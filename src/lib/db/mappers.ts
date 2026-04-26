@@ -20,6 +20,9 @@ type InvoiceRecordRow = {
   unit_price_minor: number | null;
   amount_minor: number;
   currency: string;
+  service_period_start?: string | null;
+  service_period_end?: string | null;
+  payment_terms_days?: number | null;
   row_citation: InvoiceRecord['citation'];
 };
 
@@ -56,6 +59,9 @@ export function mapInvoiceRecord(row: InvoiceRecordRow): InvoiceRecord {
     unitPriceMinor: row.unit_price_minor ?? undefined,
     amountMinor: row.amount_minor,
     currency: row.currency,
+    servicePeriodStart: row.service_period_start ?? undefined,
+    servicePeriodEnd: row.service_period_end ?? undefined,
+    paymentTermsDays: row.payment_terms_days ?? undefined,
     citation: row.row_citation
   };
 }

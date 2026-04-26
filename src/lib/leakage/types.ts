@@ -49,6 +49,9 @@ export type InvoiceRecord = {
   unitPriceMinor?: number;
   amountMinor: number;
   currency: CurrencyCode;
+  servicePeriodStart?: string;
+  servicePeriodEnd?: string;
+  paymentTermsDays?: number;
   citation: Citation;
 };
 
@@ -72,6 +75,7 @@ export type LeakageFinding = {
     | 'expired_discount_still_applied'
     | 'missed_annual_uplift'
     | 'renewal_window_risk'
+    | 'payment_terms_mismatch'
     | 'amendment_conflict';
   title: string;
   summary: string;
