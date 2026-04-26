@@ -40,12 +40,11 @@ export async function POST(request: Request) {
 
     const { data: chunks, error: chunksError } = await supabase
       .from('document_chunks')
-      .select('id, source_label, content')
+      .select('id, source_label, content, chunk_index')
       .eq('organization_id', body.organization_id)
       .eq('workspace_id', body.workspace_id)
       .eq('source_document_id', document.id)
-      .order('chunk_index', { ascending: true })
-      .limit(8);
+      .order('chunk_index', { ascending: true });
     if (chunksError) throw chunksError;
 
     let contractText = (chunks ?? []).map((chunk) => chunk.content).join('\n\n').trim();
