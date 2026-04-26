@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -15,7 +15,6 @@ import {
   ClipboardCheck,
   Database,
   Download,
-  FileBarChart,
   FileSearch,
   FileText,
   Filter,
@@ -59,6 +58,18 @@ import {
 import type { Session } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/db/supabaseBrowser';
 import type { AnalyticsPoint, WorkspaceAnalyticsPayload } from '@/lib/analytics/workspaceAnalytics';
+import { isCustomerFacingFindingStatus } from '@/lib/analytics/statuses';
+import { AppShell } from '@/components/layout/AppShell';
+import { ChartCardShell as ChartCard } from '@/components/ui/chart-card-shell';
+import { DataTable } from '@/components/ui/data-table';
+import { EmptyState } from '@/components/ui/empty-state';
+import { EvidencePanel } from '@/components/ui/evidence-panel';
+import { FormulaBlock } from '@/components/ui/formula-block';
+import { KpiCard as Metric } from '@/components/ui/kpi-card';
+import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
+import { ReportSection } from '@/components/ui/report-section';
+import { ReviewDrawer } from '@/components/ui/review-drawer';
+import { StatusPill as StatusBadge } from '@/components/ui/status-pill';
 
 type Organization = {
   id: string;
@@ -73,6 +84,17 @@ type OrganizationMember = {
   user_id: string;
   role: OrganizationRole;
   created_at: string;
+};
+
+type OrganizationInvite = {
+  id: string;
+  email: string;
+  role: OrganizationRole;
+  status: 'pending' | 'accepted' | 'cancelled' | 'expired';
+  invite_url: string;
+  invite_text: string;
+  created_at: string;
+  expires_at?: string | null;
 };
 
 type Workspace = {
@@ -285,6 +307,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   });
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
+  const [invites, setInvites] = useState<OrganizationInvite[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [documents, setDocuments] = useState<SourceDocument[]>([]);
@@ -305,6 +328,9 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const [uploadCustomerDomain, setUploadCustomerDomain] = useState('');
   const [workspaceName, setWorkspaceName] = useState('Revenue Leakage Audit');
   const [organizationName, setOrganizationName] = useState('LeakProof Customer Org');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<OrganizationRole>('reviewer');
+  const acceptedInviteTokenRef = useRef('');
   const [headerSearch, setHeaderSearch] = useState('');
   const [searchQuery, setSearchQuery] = useState('annual uplift or minimum commitment');
   const [candidateFindingId, setCandidateFindingId] = useState('');
@@ -324,11 +350,34 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId);
   const selectedOrg = organizations.find((org) => org.id === selectedOrgId);
   const selectedOrgCanManageRoles = selectedOrg ? ['owner', 'admin'].includes(selectedOrg.role) : false;
+  const selectedOrgCanReviewFindings = selectedOrg ? ['owner', 'admin', 'reviewer'].includes(selectedOrg.role) : false;
+  const assignableReviewers = members.filter((member) => ['owner', 'admin', 'reviewer'].includes(member.role));
+  const canManageTargetRole = (role: OrganizationRole) =>
+    selectedOrg?.role === 'owner' || (selectedOrg?.role === 'admin' && ['reviewer', 'member', 'viewer'].includes(role));
   const selectedContract = documents.find((document) => document.document_type === 'contract');
   const selectedFinding = findings.find((finding) => finding.id === selectedFindingId);
   const openFindings = findings.filter((finding) => ['draft', 'needs_review'].includes(finding.status));
-  const approvedFindings = findings.filter((finding) => ['approved', 'customer_ready', 'recovered'].includes(finding.status));
+  const approvedFindings = findings.filter((finding) => isCustomerFacingFindingStatus(finding.status));
   const activeSection = section;
+  const canonicalSection: Record<AuditSection, AuditSection> = {
+    overview: 'overview',
+    autopilot: 'autopilot',
+    roles: 'team',
+    team: 'team',
+    uploads: 'uploads',
+    evidence: 'evidence',
+    terms: 'contracts',
+    contracts: 'contracts',
+    records: 'revenue-records',
+    'revenue-records': 'revenue-records',
+    findings: 'findings',
+    'finding-detail': 'findings',
+    analytics: 'analytics',
+    report: 'reports',
+    reports: 'reports',
+    settings: 'settings'
+  };
+  const activeNavSection = canonicalSection[activeSection];
   const auditSections: Array<{
     id: AuditSection;
     href: string;
@@ -354,7 +403,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       icon: <Upload size={16} />
     },
     {
-      id: 'terms',
+      id: 'contracts',
       href: '/app/contracts',
       label: 'Contracts',
       title: 'Contract terms',
@@ -362,7 +411,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       icon: <ClipboardCheck size={16} />
     },
     {
-      id: 'records',
+      id: 'revenue-records',
       href: '/app/revenue-records',
       label: 'Revenue Records',
       title: 'Billing records',
@@ -394,7 +443,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       icon: <BarChart3 size={16} />
     },
     {
-      id: 'report',
+      id: 'reports',
       href: '/app/reports',
       label: 'Reports',
       title: 'Customer-ready report',
@@ -402,7 +451,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       icon: <Printer size={16} />
     },
     {
-      id: 'roles',
+      id: 'team',
       href: '/app/team',
       label: 'Team',
       title: 'Team and workflow',
@@ -435,7 +484,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       detail: 'Review calculation, evidence, and approval status for one finding.',
       icon: <AlertTriangle size={16} />
     }
-    : auditSections.find((item) => item.id === activeSection) ?? auditSections[0];
+    : auditSections.find((item) => item.id === activeNavSection) ?? auditSections[0];
   const normalizedHeaderSearch = headerSearch.trim().toLowerCase();
   const visibleOverviewFindings = (normalizedHeaderSearch
     ? findings.filter((finding) =>
@@ -473,9 +522,6 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const recoveredMinor = customerFacingAnalytics?.recoveredLeakageMinor ?? approvedFindings
     .filter((finding) => finding.status === 'recovered')
     .reduce((sum, finding) => sum + finding.estimated_amount_minor, 0);
-  const notRecoverableMinor = findings
-    .filter((finding) => finding.status === 'not_recoverable')
-    .reduce((sum, finding) => sum + finding.estimated_amount_minor, 0);
   const averageConfidence = findings.length > 0
     ? `${Math.round(findings.reduce((sum, finding) => sum + finding.confidence, 0) / findings.length * 100)}%`
     : '0%';
@@ -487,6 +533,8 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     reportReady: Boolean(reportPackId || report)
   });
   const contractHealthPoints = buildContractHealthPoints(documents, terms);
+  const documentPipelinePoints = operationsAnalytics?.documentPipeline ?? auditPipelinePoints;
+  const analyticsContractHealthPoints = operationsAnalytics?.contractHealth ?? contractHealthPoints;
   const accountRiskRows = buildAccountRiskRows(findings, evidenceCandidates);
   const highPriorityFindings = findings.filter((finding) => ['high', 'critical'].includes(String(finding.severity ?? ''))).length;
   const parsingFailures = documents.filter((document) => ['error', 'failed'].includes(document.parse_status) || document.embedding_status === 'error').length;
@@ -620,11 +668,23 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   }, [session]);
 
   useEffect(() => {
+    if (!session || acceptedInviteTokenRef.current || typeof window === 'undefined') return;
+    const inviteToken = new URL(window.location.href).searchParams.get('invite');
+    if (!inviteToken) return;
+
+    acceptedInviteTokenRef.current = inviteToken;
+    startTransition(() => {
+      acceptInvite(session, inviteToken).catch(showError);
+    });
+  }, [acceptInvite, session]);
+
+  useEffect(() => {
     if (!session || !selectedOrgId) return;
     startTransition(() => {
       Promise.all([
         refreshWorkspaces(session, selectedOrgId),
-        refreshMembers(session, selectedOrgId)
+        refreshMembers(session, selectedOrgId),
+        refreshInvites(session, selectedOrgId)
       ]).catch(showError);
     });
   }, [session, selectedOrgId]);
@@ -686,6 +746,23 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     setMembers(payload.members);
   }
 
+  async function refreshInvites(activeSession: Session, organizationId: string) {
+    const payload = await apiFetch<{ invites: OrganizationInvite[] }>(
+      activeSession,
+      `/api/organizations/${organizationId}/invites`
+    );
+    setInvites(payload.invites);
+  }
+
+  async function acceptInvite(activeSession: Session, inviteToken: string) {
+    await apiFetch(activeSession, `/api/invites/${inviteToken}/accept`, {
+      method: 'POST'
+    });
+    setMessage('Invite accepted. Organization access is ready.');
+    await refreshOrganizations(activeSession);
+    router.replace('/app/team');
+  }
+
   async function refreshWorkspaces(activeSession: Session, organizationId: string) {
     const payload = await apiFetch<{ workspaces: Workspace[] }>(
       activeSession,
@@ -733,6 +810,50 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       refreshMembers(activeSession, selectedOrgId),
       refreshOrganizations(activeSession)
     ]);
+  }
+
+  async function removeMember(memberId: string) {
+    const activeSession = requireActiveSession();
+    await apiFetch(activeSession, `/api/organizations/${selectedOrgId}/members/${memberId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ organization_id: selectedOrgId })
+    });
+    setMessage('Member removed.');
+    await Promise.all([
+      refreshMembers(activeSession, selectedOrgId),
+      refreshOrganizations(activeSession)
+    ]);
+  }
+
+  async function createInvite() {
+    const activeSession = requireActiveSession();
+    const payload = await apiFetch<{ invite: OrganizationInvite }>(activeSession, `/api/organizations/${selectedOrgId}/invites`, {
+      method: 'POST',
+      body: JSON.stringify({
+        organization_id: selectedOrgId,
+        email: inviteEmail,
+        role: inviteRole
+      })
+    });
+    setInviteEmail('');
+    setInviteRole('reviewer');
+    setMessage('Invite link created. Copy it if email delivery is not configured.');
+    setInvites((current) => [payload.invite, ...current.filter((invite) => invite.id !== payload.invite.id)]);
+  }
+
+  async function cancelInvite(inviteId: string) {
+    const activeSession = requireActiveSession();
+    await apiFetch(activeSession, `/api/organizations/${selectedOrgId}/invites/${inviteId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ organization_id: selectedOrgId })
+    });
+    setMessage('Invite cancelled.');
+    await refreshInvites(activeSession, selectedOrgId);
+  }
+
+  async function copyInviteText(invite: OrganizationInvite) {
+    await navigator.clipboard.writeText(invite.invite_text);
+    setMessage('Invite text copied.');
   }
 
   async function updateTerm(term: ContractTermRow, reviewStatus: 'approved' | 'edited' | 'needs_review' | 'rejected', includeDraft = false) {
@@ -810,6 +931,23 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       })
     });
     setMessage(`Finding marked ${status.replace('_', ' ')}.`);
+    await Promise.all([
+      refreshWorkspaceData(activeSession, selectedOrgId, selectedWorkspaceId),
+      refreshWorkspaceAnalytics(activeSession, selectedOrgId, selectedWorkspaceId)
+    ]);
+    if (findingId === selectedFindingId) await refreshFindingDetail(activeSession, selectedOrgId, findingId);
+  }
+
+  async function assignFinding(findingId: string, reviewerUserId: string) {
+    const activeSession = requireActiveSession();
+    await apiFetch(activeSession, `/api/findings/${findingId}/assignment`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        organization_id: selectedOrgId,
+        reviewer_user_id: reviewerUserId || null
+      })
+    });
+    setMessage(reviewerUserId ? 'Finding assigned.' : 'Finding unassigned.');
     await Promise.all([
       refreshWorkspaceData(activeSession, selectedOrgId, selectedWorkspaceId),
       refreshWorkspaceAnalytics(activeSession, selectedOrgId, selectedWorkspaceId)
@@ -992,52 +1130,23 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   }
 
   return (
-    <main className="audit-shell">
-      <aside className="audit-sidebar">
-        <div className="sidebar-brand">
-          <span className="brand-mark">LP</span>
-          <div>
-            <h1>LeakProof</h1>
-            <span>Revenue audit workspace</span>
-          </div>
-        </div>
-
-        <nav className="sidebar-nav" aria-label="Workspace pages">
-          {auditSections.map((item) => (
-            <Link key={item.id} href={item.href} className={item.id === activeSection ? 'active' : undefined}>
-              {item.icon}
-              <span>{item.label}</span>
-            </Link>
-          ))}
-        </nav>
-
-        <div className="sidebar-workspace">
-          <span>Workspace</span>
-          <strong>{selectedWorkspace?.name ?? 'Revenue Leakage Audit'}</strong>
-          <small>{selectedOrg?.name ?? 'LeakProof Customer Org'}</small>
-          <select value={selectedWorkspaceId} onChange={(event) => setSelectedWorkspaceId(event.target.value)} aria-label="Switch workspace from sidebar">
-            <option value="">Switch workspace</option>
-            {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
-          </select>
-        </div>
-
-        <div className="sidebar-user">
-          <span className="sidebar-avatar">F</span>
-          <div>
-            <strong>{session.user.email ?? 'Finance reviewer'}</strong>
-            <span>{selectedOrg?.name ?? 'Audit organization'}</span>
-            <span className="role-badge">{selectedOrg ? selectedOrg.role : 'viewer'}</span>
-          </div>
-        </div>
-      </aside>
-
-      <section className="audit-main">
-        <header className="workspace-header">
-          <div className="page-title">
-            <span>{selectedWorkspace?.name ?? 'Revenue Leakage Audit'} / {auditPeriod}</span>
-            <h2>{activeSectionMeta.title}</h2>
-          </div>
-          <div className="topbar-actions">
+    <AppShell
+      navItems={auditSections}
+      activeSection={activeNavSection}
+      workspaceName={selectedWorkspace?.name ?? 'Revenue Leakage Audit'}
+      organizationName={selectedOrg?.name ?? 'LeakProof Customer Org'}
+      userEmail={session.user.email ?? 'Finance reviewer'}
+      userRole={selectedOrg ? selectedOrg.role : 'viewer'}
+      sidebarWorkspaceSelector={(
+        <select value={selectedWorkspaceId} onChange={(event) => setSelectedWorkspaceId(event.target.value)} aria-label="Switch workspace from sidebar">
+          <option value="">Switch workspace</option>
+          {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
+        </select>
+      )}
+      eyebrow={`${selectedWorkspace?.name ?? 'Revenue Leakage Audit'} / ${auditPeriod}`}
+      title={activeSectionMeta.title}
+      topbarControls={(
+        <>
             <select value={auditPeriod} onChange={(event) => setAuditPeriod(event.target.value)} aria-label="Audit period">
               <option>Q2 2026</option>
               <option>Q1 2026</option>
@@ -1083,19 +1192,10 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               Profile
             </button>
             <Link className="button-link primary-action" href="/app/uploads"><Plus size={18} /> Add Files</Link>
-          </div>
-        </header>
-
-        <div className="workspace-context">
-          <div>
-            <span>Organization</span>
-            <strong>{selectedOrg?.name ?? 'Select an organization'}</strong>
-          </div>
-          <div>
-            <span>Workspace</span>
-            <strong>{selectedWorkspace?.name ?? 'Select a workspace'}</strong>
-          </div>
-          <div className="context-controls">
+        </>
+      )}
+      contextControls={(
+        <>
             {selectedOrg ? <span className="role-pill">{selectedOrg.role}</span> : null}
             <select value={selectedOrgId} onChange={(event) => setSelectedOrgId(event.target.value)} aria-label="Organization">
               <option value="">Select organization</option>
@@ -1105,12 +1205,18 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               <option value="">Select workspace</option>
               {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
             </select>
-          </div>
-        </div>
+        </>
+      )}
+    >
 
         {error ? <div className="state-banner error"><XCircle size={18} /> {error}</div> : null}
         {message ? <div className="state-banner success"><CheckCircle2 size={18} /> {message}</div> : null}
-        {isPending ? <div className="state-banner"><Loader2 className="spin" size={18} /> Updating workspace...</div> : null}
+        {isPending ? (
+          <>
+            <div className="state-banner"><Loader2 className="spin" size={18} /> Updating workspace...</div>
+            <LoadingSkeleton rows={2} />
+          </>
+        ) : null}
 
         {activeSection === 'overview' ? (
           <div className="dashboard-content">
@@ -1152,8 +1258,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
                   points={[
                     { label: 'Recoverable', value: recoverableMinor, amountMinor: recoverableMinor },
                     { label: 'Prevented', value: preventedMinor, amountMinor: preventedMinor },
-                    { label: 'Already recovered', value: recoveredMinor, amountMinor: recoveredMinor },
-                    { label: 'Not recoverable', value: notRecoverableMinor, amountMinor: notRecoverableMinor }
+                    { label: 'Already recovered', value: recoveredMinor, amountMinor: recoveredMinor }
                   ]}
                   currency={displayCurrency}
                 />
@@ -1171,10 +1276,10 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
                 <BarChartPanel points={customerFacingAnalytics?.concentrationRisk ?? []} currency={displayCurrency} layout="vertical" />
               </ChartCard>
               <ChartCard title="Contract health" scope="Internal pipeline">
-                <BarChartPanel points={contractHealthPoints} />
+                <BarChartPanel points={analyticsContractHealthPoints} />
               </ChartCard>
               <ChartCard title="Document processing pipeline" scope="Internal pipeline">
-                <FunnelPanel points={auditPipelinePoints} />
+                <FunnelPanel points={documentPipelinePoints} />
               </ChartCard>
               <ChartCard title="Confidence / review burden" scope="Needs finance review">
                 <DonutChartPanel points={reviewBurdenAnalytics?.confidenceDistribution ?? []} currency={displayCurrency} />
@@ -1217,7 +1322,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
                           <td><StatusBadge value={finding.status} /></td>
                           <td>
                             <span className="amount-strong">{formatMoney(finding.estimated_amount_minor, finding.currency)}</span>
-                            <small>{['approved', 'customer_ready', 'recovered'].includes(finding.status) ? 'Customer-facing' : 'Internal pipeline'}</small>
+                            <small>{isCustomerFacingFindingStatus(finding.status) ? 'Customer-facing' : 'Internal pipeline'}</small>
                           </td>
                         </tr>
                       ))}
@@ -1319,19 +1424,32 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               className="invite-card"
               onSubmit={(event) => {
                 event.preventDefault();
-                setMessage('Invite captured for the workspace owner. Connect email delivery when production invite emails are enabled.');
+                if (!selectedOrgId) return setError('Select or create an organization before inviting teammates.');
+                runTask(createInvite);
               }}
             >
               <UserPlus size={20} />
-              <h3>Invite reviewer</h3>
+              <h3>Invite teammate</h3>
               <p>Invite finance, billing, or RevOps teammates into the review queue without exposing customer data outside this organization.</p>
-              <input type="email" placeholder="reviewer@company.com" aria-label="Reviewer email" />
-              <select aria-label="Invite role" defaultValue="reviewer">
+              <input
+                type="email"
+                placeholder="reviewer@company.com"
+                aria-label="Reviewer email"
+                value={inviteEmail}
+                onChange={(event) => setInviteEmail(event.target.value)}
+                required
+              />
+              <select
+                aria-label="Invite role"
+                value={inviteRole}
+                onChange={(event) => setInviteRole(event.target.value as OrganizationRole)}
+              >
                 <option value="reviewer">Reviewer</option>
-                <option value="admin">Admin</option>
+                <option value="admin" disabled={selectedOrg?.role !== 'owner'}>Admin</option>
+                <option value="member">Member</option>
                 <option value="viewer">Viewer</option>
               </select>
-              <button type="submit" disabled={!selectedOrgCanManageRoles}><MailCheck size={16} /> Queue invite</button>
+              <button type="submit" disabled={!selectedOrgCanManageRoles || !inviteEmail}><MailCheck size={16} /> Create invite</button>
             </form>
             <ChartCard title="Review turnaround metrics" scope="Needs finance review">
               <div className="workflow-metrics">
@@ -1342,24 +1460,64 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             </ChartCard>
           </div>
           <DataTable
-            columns={['User', 'Role', 'Created', 'Action']}
+            columns={['User', 'Role', 'Created', 'Actions']}
             rows={members.map((member) => [
               shortId(member.user_id),
-              <select
-                key={`${member.id}-role`}
-                value={member.role}
-                disabled={!selectedOrgCanManageRoles}
-                onChange={(event) => runTask(() => updateMemberRole(member.id, event.target.value as OrganizationRole))}
-                aria-label={`Role for ${member.user_id}`}
-              >
-                {(['owner', 'admin', 'reviewer', 'viewer'] as const).map((role) => (
-                  <option key={role} value={role}>{role}</option>
-                ))}
-              </select>,
+              <span className="role-editor" key={`${member.id}-role`}>
+                <span className="role-badge">{member.role}</span>
+                <select
+                  value={member.role}
+                  disabled={!selectedOrgCanManageRoles || !canManageTargetRole(member.role)}
+                  onChange={(event) => runTask(() => updateMemberRole(member.id, event.target.value as OrganizationRole))}
+                  aria-label={`Role for ${member.user_id}`}
+                >
+                  {(['owner', 'admin', 'reviewer', 'member', 'viewer'] as const).map((role) => (
+                    <option key={role} value={role} disabled={!canManageTargetRole(role)}>{role}</option>
+                  ))}
+                </select>
+              </span>,
               formatDate(member.created_at),
-              selectedOrgCanManageRoles ? 'Change the dropdown to save' : `Your role: ${selectedOrg?.role ?? 'member'}`
+              <span className="button-group" key={`${member.id}-actions`}>
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={!selectedOrgCanManageRoles || !canManageTargetRole(member.role)}
+                  onClick={() => runTask(() => removeMember(member.id))}
+                >
+                  <Trash2 size={14} /> Remove
+                </button>
+              </span>
             ])}
             empty={selectedOrgId ? 'No members found for this organization.' : 'Select an organization to manage roles.'}
+          />
+          <DataTable
+            columns={['Pending invite', 'Role', 'Expires', 'Link', 'Action']}
+            rows={invites
+              .filter((invite) => invite.status === 'pending')
+              .map((invite) => [
+                invite.email,
+                <span className="role-badge" key={`${invite.id}-role`}>{invite.role}</span>,
+                invite.expires_at ? formatDate(invite.expires_at) : 'No expiry',
+                <button
+                  type="button"
+                  className="secondary-button"
+                  key={`${invite.id}-copy`}
+                  disabled={!selectedOrgCanManageRoles}
+                  onClick={() => runTask(() => copyInviteText(invite))}
+                >
+                  <Link2 size={14} /> Copy
+                </button>,
+                <button
+                  type="button"
+                  className="danger-button"
+                  key={`${invite.id}-cancel`}
+                  disabled={!selectedOrgCanManageRoles}
+                  onClick={() => runTask(() => cancelInvite(invite.id))}
+                >
+                  <XCircle size={14} /> Cancel
+                </button>
+              ])}
+            empty={selectedOrgCanManageRoles ? 'No pending invites.' : 'Owners and admins can manage invites.'}
           />
           <ChartCard title="Reviewer workload" scope="Needs finance review">
             <BarChartPanel points={reviewBurdenAnalytics?.reviewerWorkload ?? []} />
@@ -1435,7 +1593,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             <Metric label="Processing failures" value={String(parsingFailures)} detail="Needs operator attention" tone="danger" />
           </section>
           <ChartCard title="Document processing pipeline" scope="Internal pipeline">
-            <FunnelPanel points={auditPipelinePoints} />
+            <FunnelPanel points={documentPipelinePoints} />
           </ChartCard>
           <form
             className="upload-intake"
@@ -1797,7 +1955,20 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               <StatusBadge key={`${finding.id}-status`} value={finding.status} />,
               `${evidenceCandidates.filter((candidate) => candidate.finding_id === finding.id).length} candidate${evidenceCandidates.filter((candidate) => candidate.finding_id === finding.id).length === 1 ? '' : 's'}`,
               finding.updated_at ? formatDate(finding.updated_at) : 'Not updated',
-              finding.reviewer_user_id ? shortId(finding.reviewer_user_id) : 'Unassigned',
+              <select
+                key={`${finding.id}-assignee`}
+                value={finding.reviewer_user_id ?? ''}
+                disabled={!selectedOrgCanManageRoles}
+                onChange={(event) => runTask(() => assignFinding(finding.id, event.target.value))}
+                aria-label={`Assigned reviewer for ${finding.title}`}
+              >
+                <option value="">Unassigned</option>
+                {assignableReviewers.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {memberLabel(member)}
+                  </option>
+                ))}
+              </select>,
               <span className="button-group" key={finding.id}>
                 <Link className="button-link secondary-button" href={`/app/findings/${finding.id}`}>
                   Details
@@ -1815,6 +1986,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
+              canMutateFindings={selectedOrgCanReviewFindings}
             />
           ) : null}
         </section>
@@ -1832,6 +2004,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
+              canMutateFindings={selectedOrgCanReviewFindings}
             />
           ) : (
             <EmptyState title="No finding selected" detail="Open a finding from the findings table to review its amount, evidence, formula, and approval status." />
@@ -1861,8 +2034,8 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               { label: 'Recovered', value: findings.filter((finding) => finding.status === 'recovered').length }
             ]} /></ChartCard>
             <ChartCard title="Prevented vs recoverable by category" scope="Customer-facing leakage"><BarChartPanel points={customerFacingAnalytics?.byCategory ?? []} currency={displayCurrency} /></ChartCard>
-            <ChartCard title="Expired discounts trend" scope="Customer-facing leakage"><BarChartPanel points={(customerFacingAnalytics?.byCategory ?? []).filter((point) => /discount/i.test(point.label))} currency={displayCurrency} /></ChartCard>
-            <ChartCard title="Missed uplifts trend" scope="Customer-facing leakage"><BarChartPanel points={(customerFacingAnalytics?.byCategory ?? []).filter((point) => /uplift/i.test(point.label))} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Expired discounts trend" scope="Customer-facing leakage"><TrendChartPanel data={customerFacingAnalytics?.discountTrend ?? []} currency={displayCurrency} emptyDetail="Approved discount-related findings across multiple periods are needed for this trend." /></ChartCard>
+            <ChartCard title="Missed uplifts trend" scope="Customer-facing leakage"><TrendChartPanel data={customerFacingAnalytics?.upliftTrend ?? []} currency={displayCurrency} emptyDetail="Approved uplift-related findings across multiple periods are needed for this trend." /></ChartCard>
             <ChartCard title="Seat underbilling by product/team/customer" scope="Internal pipeline"><BarChartPanel points={(operationsAnalytics?.usageVariance ?? []).filter((point) => /seat|user|license/i.test(point.label))} /></ChartCard>
             <ChartCard title="Usage variance chart" scope="Internal pipeline"><BarChartPanel points={operationsAnalytics?.usageVariance ?? []} /></ChartCard>
             <ChartCard title="Renewal calendar heatmap" scope="Internal pipeline"><HeatmapPanel points={operationsAnalytics?.renewalCalendar ?? []} /></ChartCard>
@@ -1888,18 +2061,21 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             <ChartCard title="Recoverable vs prevented" scope="Customer-facing leakage"><DonutChartPanel points={[
               { label: 'Recoverable', value: recoverableMinor, amountMinor: recoverableMinor },
               { label: 'Prevented', value: preventedMinor, amountMinor: preventedMinor },
-              { label: 'Recovered', value: recoveredMinor, amountMinor: recoveredMinor },
-              { label: 'Not recoverable', value: notRecoverableMinor, amountMinor: notRecoverableMinor }
+              { label: 'Recovered', value: recoveredMinor, amountMinor: recoveredMinor }
             ]} currency={displayCurrency} /></ChartCard>
             <ChartCard title="Status summary" scope="Needs finance review"><BarChartPanel points={reviewBurdenAnalytics?.allStatuses ?? []} /></ChartCard>
           </section>
           <div className="report-layout">
             <div>
-              <h3>Executive summary</h3>
-              <p className="muted">This report is presentation-ready for CFO and founder review. Totals exclude draft, needs-review, dismissed, and not-recoverable findings.</p>
+              <ReportSection
+                title="Executive summary"
+                detail="This report is presentation-ready for CFO and founder review. Totals exclude draft, needs-review, dismissed, and not-recoverable findings."
+              >
               <RankedList points={customerFacingAnalytics?.byCategory ?? []} currency={displayCurrency} />
-              <h3>High-priority actions</h3>
+              </ReportSection>
+              <ReportSection title="High-priority actions">
               <ActionList findings={approvedFindings.length > 0 ? approvedFindings : findings} />
+              </ReportSection>
             </div>
             <div>
               <h3>Approval controls</h3>
@@ -1995,50 +2171,8 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
           </section>
         </section>
         ) : null}
-      </section>
-    </main>
+    </AppShell>
   );
-}
-
-function Metric({
-  label,
-  value,
-  detail,
-  tone = 'default'
-}: {
-  label: string;
-  value: string;
-  detail?: string;
-  tone?: 'default' | 'good' | 'warning' | 'danger' | 'muted';
-}) {
-  return (
-    <div className={`metric metric-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {detail ? <small>{detail}</small> : null}
-    </div>
-  );
-}
-
-function StatusBadge({
-  value,
-  tone
-}: {
-  value: string;
-  tone?: 'good' | 'warning' | 'danger' | 'muted';
-}) {
-  const normalized = value.toLowerCase().replaceAll(' ', '_');
-  const inferredTone = tone ?? (
-    ['approved', 'customer_ready', 'recovered', 'complete', 'ready', 'linked', 'good'].includes(normalized)
-      ? 'good'
-      : ['draft', 'needs_review', 'in_review', 'needed', 'open', 'review'].includes(normalized)
-        ? 'warning'
-        : ['dismissed', 'rejected', 'not_recoverable'].includes(normalized)
-          ? 'danger'
-          : 'muted'
-  );
-
-  return <span className={`status-badge status-${inferredTone}`}>{value.replaceAll('_', ' ')}</span>;
 }
 
 function SectionHeader({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
@@ -2053,43 +2187,7 @@ function SectionHeader({ icon, title, detail }: { icon: React.ReactNode; title: 
   );
 }
 
-function DataTable({ columns, rows, empty }: { columns: string[]; rows: Array<Array<React.ReactNode>>; empty: string }) {
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr><td colSpan={columns.length} className="empty-cell">{empty}</td></tr>
-          ) : rows.map((row, index) => (
-            <tr key={index}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 const chartColors = ['#1D4ED8', '#059669', '#D97706', '#4F46E5', '#DC2626', '#64748B', '#0F172A'];
-
-function ChartCard({ title, scope, children }: { title: string; scope: 'Customer-facing leakage' | 'Internal pipeline' | 'Needs finance review'; children: React.ReactNode }) {
-  return (
-    <section className="chart-card">
-      <div className="chart-card-header">
-        <div>
-          <h3>{title}</h3>
-          <p>{scope === 'Customer-facing leakage' ? 'Approved/customer-ready/recovered only.' : scope === 'Internal pipeline' ? 'Internal operational data, not customer-facing leakage.' : 'Review workflow data for finance operators.'}</p>
-        </div>
-        <span className={`scope-chip ${scope === 'Customer-facing leakage' ? 'scope-approved' : scope === 'Internal pipeline' ? 'scope-internal' : 'scope-review'}`}>
-          {scope}
-        </span>
-      </div>
-      {children}
-    </section>
-  );
-}
 
 function BarChartPanel({
   points,
@@ -2166,9 +2264,17 @@ function DonutChartPanel({ points, currency }: { points: AnalyticsPoint[]; curre
   );
 }
 
-function TrendChartPanel({ data, currency = 'USD' }: { data: WorkspaceAnalyticsPayload['customerFacing']['trend']; currency?: string }) {
+function TrendChartPanel({
+  data,
+  currency = 'USD',
+  emptyDetail = 'Approve findings across multiple periods to see customer-facing leakage movement.'
+}: {
+  data: WorkspaceAnalyticsPayload['customerFacing']['trend'];
+  currency?: string;
+  emptyDetail?: string;
+}) {
   if (data.length === 0) {
-    return <EmptyState title="No approved trend yet" detail="Approve findings across multiple periods to see customer-facing leakage movement." compact />;
+    return <EmptyState title="No approved trend yet" detail={emptyDetail} compact />;
   }
 
   return (
@@ -2186,7 +2292,6 @@ function TrendChartPanel({ data, currency = 'USD' }: { data: WorkspaceAnalyticsP
           <YAxis tickFormatter={(value) => compactMoney(Number(value), currency)} stroke="#94A3B8" fontSize={11} />
           <Tooltip formatter={(value) => formatMoney(Number(value), currency)} />
           <Area type="monotone" dataKey="approvedMinor" name="Customer-facing leakage" stroke="#1D4ED8" fill="url(#approvedLeakage)" strokeWidth={2} />
-          <Line type="monotone" dataKey="internalPipelineMinor" name="Internal pipeline" stroke="#D97706" strokeWidth={2} dot={false} />
         </AreaChart>
       </ResponsiveContainer>
     </div>
@@ -2352,16 +2457,6 @@ function SingleMetricPanel({ value, detail }: { value: string; detail: string })
   );
 }
 
-function EmptyState({ title, detail, compact = false }: { title: string; detail: string; compact?: boolean }) {
-  return (
-    <div className={compact ? 'empty-state compact-empty' : 'empty-state'}>
-      <FileBarChart size={compact ? 20 : 28} />
-      <strong>{title}</strong>
-      <p>{detail}</p>
-    </div>
-  );
-}
-
 function EvidenceMiniList({ items, empty }: { items: EvidenceItemRow[]; empty: string }) {
   if (items.length === 0) return <p className="muted">{empty}</p>;
 
@@ -2397,6 +2492,8 @@ function buildAuditPipelinePoints(input: {
   findings: FindingRow[];
   reportReady: boolean;
 }): AnalyticsPoint[] {
+  if (input.documents.length === 0 && input.terms.length === 0 && input.findings.length === 0 && !input.reportReady) return [];
+
   const parsed = input.documents.filter((document) => document.parse_status === 'parsed').length;
   const embedded = input.documents.filter((document) => document.embedding_status === 'embedded').length;
   const reviewedTerms = input.terms.filter((term) => ['approved', 'edited'].includes(term.review_status)).length;
@@ -2414,11 +2511,11 @@ function buildAuditPipelinePoints(input: {
 }
 
 function buildContractHealthPoints(documents: SourceDocument[], terms: ContractTermRow[]): AnalyticsPoint[] {
+  if (documents.length === 0 && terms.length === 0) return [];
+
   const contractDocuments = documents.filter((document) => document.document_type === 'contract');
   const approvedOrEdited = terms.filter((term) => ['approved', 'edited'].includes(term.review_status));
   const pendingTerms = terms.filter((term) => ['extracted', 'needs_review'].includes(term.review_status));
-  const pricingTermTypes = new Set(['base_fee', 'seat_price', 'minimum_commitment', 'overage_price', 'annual_uplift']);
-  const missingPricingClauses = Array.from(pricingTermTypes).filter((type) => !terms.some((term) => term.term_type === type)).length;
   const highRiskTerms = terms.filter((term) =>
     /discount|uplift|minimum|renewal|notice|overage/i.test(term.term_type) && (term.confidence < 0.85 || term.review_status === 'needs_review')
   ).length;
@@ -2433,15 +2530,13 @@ function buildContractHealthPoints(documents: SourceDocument[], terms: ContractT
     { label: 'Contracts fully reviewed', value: fullyReviewedContracts, count: fullyReviewedContracts },
     { label: 'Contracts pending review', value: Math.max(contractDocuments.length - fullyReviewedContracts, pendingTerms.length), count: pendingTerms.length },
     { label: 'High-risk terms detected', value: highRiskTerms, count: highRiskTerms },
-    { label: 'Missing pricing clauses', value: missingPricingClauses, count: missingPricingClauses },
     { label: 'Renewal clauses nearing deadlines', value: renewalClauses, count: renewalClauses }
   ];
 }
 
 function buildAccountRiskRows(findings: FindingRow[], candidates: EvidenceCandidateRow[]): AccountRiskRow[] {
   const grouped = new Map<string, { amountMinor: number; categories: Set<string>; statuses: Map<string, number>; confidenceTotal: number; count: number; evidenceCount: number }>();
-  const scopedFindings = findings.filter((finding) => ['approved', 'customer_ready', 'recovered'].includes(finding.status));
-  const source = scopedFindings.length > 0 ? scopedFindings : findings;
+  const source = findings.filter((finding) => isCustomerFacingFindingStatus(finding.status));
 
   for (const finding of source) {
     const account = finding.customer_id ? shortId(finding.customer_id) : 'Unassigned account';
@@ -2496,7 +2591,8 @@ function FindingDetailPanel({
   onApproveCandidate,
   onRejectCandidate,
   onRemoveEvidence,
-  onUpdateStatus
+  onUpdateStatus,
+  canMutateFindings
 }: {
   finding: FindingRow;
   evidence: EvidenceItemRow[];
@@ -2505,6 +2601,7 @@ function FindingDetailPanel({
   onRejectCandidate: (candidateId: string) => void;
   onRemoveEvidence: (evidenceItemId: string) => void;
   onUpdateStatus: (status: FindingStatusAction) => void;
+  canMutateFindings: boolean;
 }) {
   const formula = typeof finding.calculation?.formula === 'string' ? finding.calculation.formula : 'See calculation inputs';
   const calculationInputs = typeof finding.calculation?.inputs === 'object' && finding.calculation.inputs
@@ -2569,8 +2666,10 @@ function FindingDetailPanel({
         </article>
         <article className="detail-card formula-card">
           <h4>Calculation formula</h4>
-          <code>{formula}</code>
-          <p>Money values are calculated in deterministic code after extracted terms are reviewed.</p>
+          <FormulaBlock
+            formula={formula}
+            detail="Money values are calculated in deterministic code after extracted terms are reviewed."
+          />
         </article>
         <article className="detail-card">
           <h4>Recommended action</h4>
@@ -2578,23 +2677,24 @@ function FindingDetailPanel({
         </article>
       </section>
 
-      <section className="status-transition-card">
-        <div>
-          <h4>Status transition controls</h4>
-          <p>Move the finding through finance review only after the evidence and calculation are acceptable.</p>
-        </div>
-        <div className="button-group">
+      <ReviewDrawer
+        title="Status transition controls"
+        detail="Move the finding through finance review only after the evidence and calculation are acceptable."
+        actions={(
+          <div className="button-group">
           {findingStatusActions.map((action) => (
             <button
               key={action.value}
               className={action.tone === 'danger' ? 'danger-button' : 'secondary-button'}
+              disabled={!canMutateFindings}
               onClick={() => onUpdateStatus(action.value)}
             >
               {action.label}
             </button>
           ))}
-        </div>
-      </section>
+          </div>
+        )}
+      />
 
       <div className="split-grid">
         <div className="detail-card">
@@ -2618,14 +2718,12 @@ function FindingDetailPanel({
       </div>
 
       <section className="detail-card-grid two-up">
-        <article className="detail-card">
-          <h4>Contract evidence</h4>
+        <EvidencePanel title="Contract evidence">
           <EvidenceMiniList items={contractEvidence} empty="No approved contract clause evidence is attached yet." />
-        </article>
-        <article className="detail-card">
-          <h4>Invoice / usage evidence</h4>
+        </EvidencePanel>
+        <EvidencePanel title="Invoice / usage evidence">
           <EvidenceMiniList items={invoiceUsageEvidence} empty="No approved invoice or usage evidence is attached yet." />
-        </article>
+        </EvidencePanel>
       </section>
 
       <div>
@@ -2637,7 +2735,7 @@ function FindingDetailPanel({
             item.approval_state,
             item.citation?.label ?? 'Source',
             item.excerpt ?? item.citation?.excerpt ?? 'No excerpt saved.',
-            <button className="danger-button" key={item.id} onClick={() => onRemoveEvidence(item.id)}>
+            <button className="danger-button" key={item.id} disabled={!canMutateFindings} onClick={() => onRemoveEvidence(item.id)}>
               <Trash2 size={16} /> Remove
             </button>
           ])}
@@ -2655,8 +2753,8 @@ function FindingDetailPanel({
             candidate.approval_state,
             candidate.document_chunk?.content?.slice(0, 220) ?? 'No preview available.',
             <span className="button-group" key={candidate.id}>
-              <button onClick={() => onApproveCandidate(candidate.id)}><CheckCircle2 size={16} /> Approve</button>
-              <button className="danger-button" onClick={() => onRejectCandidate(candidate.id)}>Reject</button>
+              <button disabled={!canMutateFindings} onClick={() => onApproveCandidate(candidate.id)}><CheckCircle2 size={16} /> Approve</button>
+              <button className="danger-button" disabled={!canMutateFindings} onClick={() => onRejectCandidate(candidate.id)}>Reject</button>
             </span>
           ])}
           empty="No evidence candidates attached yet."
@@ -2758,6 +2856,10 @@ function formatCustomerLabel(customerRelation: SourceDocument['customers'], cust
 
 function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}...${value.slice(-4)}` : value;
+}
+
+function memberLabel(member: OrganizationMember): string {
+  return `${shortId(member.user_id)} (${member.role})`;
 }
 
 function formatDate(value: string): string {

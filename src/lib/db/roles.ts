@@ -37,6 +37,31 @@ export function assertCanManageRole(actorRole: OrganizationRole, targetRole: Org
   }
 }
 
+export function assertCanChangeMemberRole(
+  actorRole: OrganizationRole,
+  fromRole: OrganizationRole,
+  toRole: OrganizationRole,
+  ownerCount: number
+): void {
+  assertCanManageRole(actorRole, toRole);
+
+  if (isPrivilegeEscalation(actorRole, fromRole, toRole)) {
+    throw new Error('forbidden');
+  }
+
+  if (fromRole === 'owner' && toRole !== 'owner' && ownerCount <= 1) {
+    throw new Error('last_owner');
+  }
+}
+
+export function assertCanRemoveMember(actorRole: OrganizationRole, targetRole: OrganizationRole, ownerCount: number): void {
+  assertCanManageRole(actorRole, targetRole);
+
+  if (targetRole === 'owner' && ownerCount <= 1) {
+    throw new Error('last_owner');
+  }
+}
+
 export function isPrivilegeEscalation(actorRole: OrganizationRole, fromRole: OrganizationRole, toRole: OrganizationRole): boolean {
-  return ROLE_RANK[toRole] > ROLE_RANK[actorRole] || (actorRole !== 'owner' && ROLE_RANK[toRole] > ROLE_RANK[fromRole]);
+  return ROLE_RANK[toRole] > ROLE_RANK[actorRole];
 }

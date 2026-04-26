@@ -1,0 +1,9 @@
+customer_external_id,customer_name,segment,billing_model,contract_type,contract_value,currency,renewal_date,owner_label,domain
+alpha,Alpha Retail Cloud Ltd.,Retail,Minimum + usage,MSA,120000.00,USD,2026-12-31,Nina Patel,alpha.example
+beta,Beta Health Ops Inc.,Healthcare,Seat-based,Order form,96000.00,USD,2026-09-30,Marco Lee,betahealth.example
+cobalt,Cobalt API Co.,SaaS,Usage overage,Order form,72000.00,USD,2027-02-28,Ari Singh,cobaltapi.example
+delta,Delta Media Group,Media,Subscription discount,MSA,144000.00,USD,2026-11-30,Leah Chen,deltamedia.example
+evergreen,Evergreen Analytics LLC.,Analytics,Subscription uplift,MSA,216000.00,USD,2027-03-31,Sam Rivera,evergreen.example
+fjord,Fjord Support Services,IT services,Minimum commitment,MSA,120000.00,USD,2026-12-31,Nina Patel,fjordsupport.example
+helio,Helio Learning Systems,EdTech,Subscription uplift,Order form,277800.00,USD,2027-01-31,Marco Lee,heliolearn.example
+ion,Ion Logistics Platform,Logistics,Usage overage,Order form,90000.00,USD,2027-04-30,Ari Singh,ionlogistics.example

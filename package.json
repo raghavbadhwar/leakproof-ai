@@ -12,6 +12,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude '**/*.integration.test.ts' --exclude 'playwright/**'",
+    "test:integration": "RUN_INTEGRATION=1 vitest run --passWithNoTests '**/*.integration.test.ts'",
     "test:watch": "vitest",
     "test:e2e": "echo \"Playwright tests require production Supabase credentials and browser runner\"",
     "smoke": "node scripts/smoke-test.mjs"

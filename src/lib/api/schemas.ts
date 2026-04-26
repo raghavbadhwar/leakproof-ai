@@ -66,6 +66,20 @@ export const updateMemberRoleSchema = z.object({
   role: organizationRoleSchema
 });
 
+export const createInviteSchema = z.object({
+  organization_id: uuidSchema,
+  email: z.string().trim().email().max(320),
+  role: z.enum(['admin', 'reviewer', 'member', 'viewer'])
+});
+
+export const cancelInviteSchema = z.object({
+  organization_id: uuidSchema
+});
+
+export const acceptInviteSchema = z.object({
+  token: z.string().trim().uuid()
+});
+
 export const updateTermSchema = z.object({
   organization_id: uuidSchema,
   term_value: z.unknown().optional(),
@@ -95,6 +109,11 @@ export const findingStatusUpdateSchema = z.object({
       message: 'A reason is required for this status.'
     });
   }
+});
+
+export const findingAssignmentSchema = z.object({
+  organization_id: uuidSchema,
+  reviewer_user_id: uuidSchema.nullable()
 });
 
 export const evidenceCandidateActionSchema = z.object({

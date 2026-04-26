@@ -2842,6 +2842,17 @@ body {
   width: max-content;
 }
 
+.role-editor {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.role-editor select {
+  min-width: 132px;
+}
+
 .audit-main {
   background: var(--lp-bg);
   gap: 0;
@@ -3770,5 +3781,120 @@ tbody tr:hover {
   .topbar-actions .primary-action,
   .topbar-actions .profile-menu {
     width: auto;
+  }
+}
+
+.loading-skeleton {
+  background: #fff;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 12px 24px 0;
+  padding: 14px;
+}
+
+.loading-skeleton span {
+  animation: skeleton-pulse 1.2s ease-in-out infinite;
+  background: linear-gradient(90deg, #eef2f7, #f8fafc, #eef2f7);
+  background-size: 220% 100%;
+  border-radius: 8px;
+  display: block;
+  height: 14px;
+}
+
+.loading-skeleton span:nth-child(2) {
+  width: 74%;
+}
+
+.formula-block {
+  display: grid;
+  gap: 10px;
+}
+
+.formula-block code {
+  background: #0f172a;
+  border-radius: 8px;
+  color: #e0f2fe;
+  display: block;
+  font-family: var(--font-mono), "IBM Plex Mono", ui-monospace, monospace;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.formula-block p {
+  color: var(--lp-muted);
+  margin: 0;
+}
+
+.review-drawer {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.review-drawer h4,
+.report-section-block h3 {
+  color: var(--lp-text);
+  margin: 0;
+}
+
+.review-drawer p {
+  color: var(--lp-muted);
+  margin: 0;
+}
+
+.review-drawer-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.report-section-block {
+  display: grid;
+  gap: 12px;
+}
+
+.report-section-block + .report-section-block {
+  border-top: 1px solid var(--lp-border);
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.evidence-panel {
+  align-content: start;
+}
+
+@keyframes skeleton-pulse {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@media (max-width: 920px) {
+  .loading-skeleton {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .review-drawer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-drawer-actions {
+    justify-content: stretch;
   }
 }

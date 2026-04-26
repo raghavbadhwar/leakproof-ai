@@ -1,0 +1,5 @@
+customer_external_id,customer_name,segment,billing_model,contract_type,contract_value,renewal_date,owner_label,domain,period_start,period_end,metric_name,quantity,product_label,team_label
+alpha,Alpha Retail Cloud Ltd.,Retail,Minimum + usage,MSA,120000.00,2026-12-31,Nina Patel,alpha.example,2026-03-01,2026-03-31,api_calls,125000,Core API,Revenue Ops
+beta,Beta Health Ops Inc.,Healthcare,Seat-based,Order form,96000.00,2026-09-30,Marco Lee,betahealth.example,2026-03-01,2026-03-31,active_seats,120,Clinical Portal,Revenue Ops
+cobalt,Cobalt API Co.,SaaS,Usage overage,Order form,72000.00,2027-02-28,Ari Singh,cobaltapi.example,2026-03-01,2026-03-31,api_calls,180000,API Gateway,Revenue Ops
+ion,Ion Logistics Platform,Logistics,Usage overage,Order form,90000.00,2027-04-30,Ari Singh,ionlogistics.example,2026-03-01,2026-03-31,shipment_events,96300,Logistics API,Billing

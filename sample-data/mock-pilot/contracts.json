@@ -1,0 +1,265 @@
+[
+  {
+    "customer_external_id": "alpha",
+    "customer_name": "Alpha Retail Cloud Ltd.",
+    "contract_name": "Alpha Retail Cloud MSA",
+    "contract_text": "Effective 2026-01-01. Customer will pay a minimum monthly commitment of USD 10,000. Monthly subscription includes 100,000 API calls. Additional API calls are billed at USD 0.01 per call.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "contract_start_date",
+        "value": "Effective 2026-01-01.",
+        "normalized_value": { "date": "2026-01-01" },
+        "citation": { "sourceType": "contract", "sourceId": "contract_alpha", "label": "Alpha MSA effective date", "excerpt": "Effective 2026-01-01." },
+        "source_excerpt": "Effective 2026-01-01.",
+        "confidence": 0.96,
+        "needs_review": false,
+        "reasoning_summary": "The effective date is explicit."
+      },
+      {
+        "term_type": "minimum_commitment",
+        "value": "minimum monthly commitment of USD 10,000",
+        "normalized_value": { "amountMinor": 1000000, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_alpha", "label": "Alpha MSA fees", "excerpt": "Customer will pay a minimum monthly commitment of USD 10,000." },
+        "source_excerpt": "Customer will pay a minimum monthly commitment of USD 10,000.",
+        "confidence": 0.96,
+        "needs_review": false,
+        "reasoning_summary": "The minimum amount and monthly period are explicit."
+      },
+      {
+        "term_type": "usage_allowance",
+        "value": "100,000 API calls",
+        "normalized_value": { "metricName": "api_calls", "quantity": 100000, "period": "monthly" },
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_alpha", "label": "Alpha MSA usage allowance", "excerpt": "Monthly subscription includes 100,000 API calls." },
+        "source_excerpt": "Monthly subscription includes 100,000 API calls.",
+        "confidence": 0.94,
+        "needs_review": false,
+        "reasoning_summary": "The included usage allowance is explicit."
+      },
+      {
+        "term_type": "overage_price",
+        "value": "USD 0.01 per additional API call",
+        "normalized_value": { "metricName": "api_calls", "amountMinor": 1, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_alpha", "label": "Alpha MSA overage", "excerpt": "Additional API calls are billed at USD 0.01 per call." },
+        "source_excerpt": "Additional API calls are billed at USD 0.01 per call.",
+        "confidence": 0.94,
+        "needs_review": false,
+        "reasoning_summary": "The overage price and metric are explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "beta",
+    "customer_name": "Beta Health Ops Inc.",
+    "contract_name": "Beta Health Ops Order Form",
+    "contract_text": "Active user seats are billed monthly at USD 80 per seat.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "seat_price",
+        "value": "USD 80 per seat",
+        "normalized_value": { "amountMinor": 8000, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_beta", "label": "Beta order form seats", "excerpt": "Active user seats are billed monthly at USD 80 per seat." },
+        "source_excerpt": "Active user seats are billed monthly at USD 80 per seat.",
+        "confidence": 0.95,
+        "needs_review": false,
+        "reasoning_summary": "The monthly seat price is explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "cobalt",
+    "customer_name": "Cobalt API Co.",
+    "contract_name": "Cobalt API Order Form",
+    "contract_text": "The plan includes 100,000 API calls each month. Overage is USD 0.03 per API call.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "usage_allowance",
+        "value": "100,000 API calls each month",
+        "normalized_value": { "metricName": "api_calls", "quantity": 100000, "period": "monthly" },
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_cobalt", "label": "Cobalt allowance", "excerpt": "The plan includes 100,000 API calls each month." },
+        "source_excerpt": "The plan includes 100,000 API calls each month.",
+        "confidence": 0.94,
+        "needs_review": false,
+        "reasoning_summary": "The allowance and monthly period are explicit."
+      },
+      {
+        "term_type": "overage_price",
+        "value": "USD 0.03 per API call",
+        "normalized_value": { "metricName": "api_calls", "amountMinor": 3, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_cobalt", "label": "Cobalt overage", "excerpt": "Overage is USD 0.03 per API call." },
+        "source_excerpt": "Overage is USD 0.03 per API call.",
+        "confidence": 0.94,
+        "needs_review": false,
+        "reasoning_summary": "The overage price and metric are explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "delta",
+    "customer_name": "Delta Media Group",
+    "contract_name": "Delta Media MSA",
+    "contract_text": "A 10% promotional discount applies through 2026-03-31 only. After that date, standard pricing applies.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "discount",
+        "value": "10% promotional discount",
+        "normalized_value": { "percent": 10 },
+        "citation": { "sourceType": "contract", "sourceId": "contract_delta", "label": "Delta discount", "excerpt": "A 10% promotional discount applies through 2026-03-31 only." },
+        "source_excerpt": "A 10% promotional discount applies through 2026-03-31 only.",
+        "confidence": 0.92,
+        "needs_review": false,
+        "reasoning_summary": "The discount percent is explicit."
+      },
+      {
+        "term_type": "discount_expiry",
+        "value": "through 2026-03-31 only",
+        "normalized_value": { "date": "2026-03-31" },
+        "citation": { "sourceType": "contract", "sourceId": "contract_delta", "label": "Delta discount expiry", "excerpt": "A 10% promotional discount applies through 2026-03-31 only." },
+        "source_excerpt": "A 10% promotional discount applies through 2026-03-31 only.",
+        "confidence": 0.92,
+        "needs_review": false,
+        "reasoning_summary": "The expiry date is explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "evergreen",
+    "customer_name": "Evergreen Analytics LLC.",
+    "contract_name": "Evergreen Analytics MSA",
+    "contract_text": "Effective 2025-04-01. Monthly subscription fee is USD 18,000. Fees increase by 7% on each anniversary of the effective date.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "contract_start_date",
+        "value": "Effective 2025-04-01.",
+        "normalized_value": { "date": "2025-04-01" },
+        "citation": { "sourceType": "contract", "sourceId": "contract_evergreen", "label": "Evergreen effective date", "excerpt": "Effective 2025-04-01." },
+        "source_excerpt": "Effective 2025-04-01.",
+        "confidence": 0.96,
+        "needs_review": false,
+        "reasoning_summary": "The effective date is explicit."
+      },
+      {
+        "term_type": "base_fee",
+        "value": "Monthly subscription fee is USD 18,000.",
+        "normalized_value": { "amountMinor": 1800000, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_evergreen", "label": "Evergreen base fee", "excerpt": "Monthly subscription fee is USD 18,000." },
+        "source_excerpt": "Monthly subscription fee is USD 18,000.",
+        "confidence": 0.95,
+        "needs_review": false,
+        "reasoning_summary": "The monthly base fee is explicit."
+      },
+      {
+        "term_type": "annual_uplift",
+        "value": "Fees increase by 7%",
+        "normalized_value": { "percent": 7 },
+        "citation": { "sourceType": "contract", "sourceId": "contract_evergreen", "label": "Evergreen uplift", "excerpt": "Fees increase by 7% on each anniversary of the effective date." },
+        "source_excerpt": "Fees increase by 7% on each anniversary of the effective date.",
+        "confidence": 0.95,
+        "needs_review": false,
+        "reasoning_summary": "The annual uplift percent is explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "fjord",
+    "customer_name": "Fjord Support Services",
+    "contract_name": "Fjord Support MSA",
+    "contract_text": "Customer has a minimum monthly managed services commitment of USD 10,000.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "minimum_commitment",
+        "value": "minimum monthly managed services commitment of USD 10,000",
+        "normalized_value": { "amountMinor": 1000000, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_fjord", "label": "Fjord minimum", "excerpt": "Customer has a minimum monthly managed services commitment of USD 10,000." },
+        "source_excerpt": "Customer has a minimum monthly managed services commitment of USD 10,000.",
+        "confidence": 0.95,
+        "needs_review": false,
+        "reasoning_summary": "The minimum amount and period are explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "helio",
+    "customer_name": "Helio Learning Systems",
+    "contract_name": "Helio Learning Order Form",
+    "contract_text": "Effective 2025-01-01. Monthly platform fee is USD 23,150. Fees uplift by 10% annually after the first year.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "contract_start_date",
+        "value": "Effective 2025-01-01.",
+        "normalized_value": { "date": "2025-01-01" },
+        "citation": { "sourceType": "contract", "sourceId": "contract_helio", "label": "Helio effective date", "excerpt": "Effective 2025-01-01." },
+        "source_excerpt": "Effective 2025-01-01.",
+        "confidence": 0.96,
+        "needs_review": false,
+        "reasoning_summary": "The effective date is explicit."
+      },
+      {
+        "term_type": "base_fee",
+        "value": "Monthly platform fee is USD 23,150.",
+        "normalized_value": { "amountMinor": 2315000, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_helio", "label": "Helio base fee", "excerpt": "Monthly platform fee is USD 23,150." },
+        "source_excerpt": "Monthly platform fee is USD 23,150.",
+        "confidence": 0.95,
+        "needs_review": false,
+        "reasoning_summary": "The monthly fee is explicit."
+      },
+      {
+        "term_type": "annual_uplift",
+        "value": "uplift by 10% annually",
+        "normalized_value": { "percent": 10 },
+        "citation": { "sourceType": "contract", "sourceId": "contract_helio", "label": "Helio uplift", "excerpt": "Fees uplift by 10% annually after the first year." },
+        "source_excerpt": "Fees uplift by 10% annually after the first year.",
+        "confidence": 0.94,
+        "needs_review": false,
+        "reasoning_summary": "The annual uplift percent is explicit."
+      }
+    ]
+  },
+  {
+    "customer_external_id": "ion",
+    "customer_name": "Ion Logistics Platform",
+    "contract_name": "Ion Logistics Order Form",
+    "contract_text": "Monthly plan includes 50,000 shipment_events. Overage is USD 0.05 per shipment_event.",
+    "expected_extracted_terms": [
+      {
+        "term_type": "usage_allowance",
+        "value": "50,000 shipment_events",
+        "normalized_value": { "metricName": "shipment_events", "quantity": 50000, "period": "monthly" },
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_ion", "label": "Ion allowance", "excerpt": "Monthly plan includes 50,000 shipment_events." },
+        "source_excerpt": "Monthly plan includes 50,000 shipment_events.",
+        "confidence": 0.93,
+        "needs_review": false,
+        "reasoning_summary": "The allowance and monthly period are explicit."
+      },
+      {
+        "term_type": "overage_price",
+        "value": "USD 0.05 per shipment_event",
+        "normalized_value": { "metricName": "shipment_events", "amountMinor": 5, "currency": "USD", "period": "monthly" },
+        "currency": "USD",
+        "period": "monthly",
+        "citation": { "sourceType": "contract", "sourceId": "contract_ion", "label": "Ion overage", "excerpt": "Overage is USD 0.05 per shipment_event." },
+        "source_excerpt": "Overage is USD 0.05 per shipment_event.",
+        "confidence": 0.93,
+        "needs_review": false,
+        "reasoning_summary": "The overage price and metric are explicit."
+      }
+    ]
+  }
+]

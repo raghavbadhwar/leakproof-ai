@@ -6,6 +6,15 @@ The goal is not to make the AI sound smart. The goal is to make findings accurat
 
 Use `sample-data/` first, then add anonymized real customer examples.
 
+Current local fixtures:
+
+- `sample-data/customer_alpha_*`: smallest single-customer parser/reconciliation fixture.
+- `sample-data/mock-pilot/contracts.json`: multi-customer contract excerpts plus expected extraction terms validated against the production extraction schema.
+- `sample-data/mock-pilot/invoices.csv`: invoice rows with customer metadata, service periods, discounts, seat quantities, and subscription fees.
+- `sample-data/mock-pilot/usage.csv`: usage rows for API calls, active seats, and shipment events.
+- `sample-data/mock-pilot/customer_metadata.csv`: customer segment, billing model, contract type, owner, domain, renewal, and contract value metadata.
+- `sample-data/mock-pilot/expected_findings.json`: expected per-customer findings and the current mock-pilot total of USD 26,690.
+
 Each eval case should include:
 
 - contract text or PDF
@@ -53,6 +62,33 @@ Ask a finance person:
 - authorization tests for tenant boundaries
 - end-to-end smoke test for demo flow
 
+## Automated local gate
+
+Fast unit/evaluation tests:
+
+```bash
+pnpm test:unit
+```
+
+Full local verification:
+
+```bash
+pnpm test
+pnpm typecheck
+pnpm lint
+pnpm build
+```
+
+Local smoke after starting the app:
+
+```bash
+APP_URL=http://localhost:3000 pnpm smoke
+```
+
+By default, smoke checks the app route, health endpoint, and the analytics API auth guard without requiring Supabase credentials. To exercise a seeded analytics workspace, provide `SMOKE_WORKSPACE_ID`, `SMOKE_ORGANIZATION_ID`, and `SMOKE_AUTH_TOKEN`; that mode expects the analytics endpoint to return `200`.
+
+Live integration tests must be named `*.integration.test.ts` and should require `RUN_INTEGRATION=1` plus real service credentials. They are intentionally separate from `pnpm test:unit` so local evaluation does not depend on Gemini or Supabase.
+
 ## Quality gate before selling
 
 Before charging a customer, the product must pass:
@@ -62,4 +98,3 @@ Before charging a customer, the product must pass:
 - every finding has citations
 - every money amount has calculation details
 - all external actions require human approval
-

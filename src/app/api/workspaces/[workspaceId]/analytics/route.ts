@@ -4,6 +4,7 @@ import { handleApiError } from '@/lib/api/responses';
 import { requireWorkspaceMember } from '@/lib/db/auth';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { buildWorkspaceAnalytics, type WorkspaceAnalyticsFinding } from '@/lib/analytics/workspaceAnalytics';
+import { filterByAnalyticsPeriod, parseAnalyticsDateFilter } from '@/lib/analytics/period';
 
 export const runtime = 'nodejs';
 
@@ -12,8 +13,9 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     const { workspaceId } = await context.params;
     const url = new URL(request.url);
     const organizationId = uuidSchema.parse(url.searchParams.get('organization_id'));
-    const periodStart = parseOptionalDate(url.searchParams.get('period_start'));
-    const periodEnd = parseOptionalDate(url.searchParams.get('period_end'));
+    const periodStart = parseAnalyticsDateFilter(url.searchParams.get('period_start'));
+    const periodEnd = parseAnalyticsDateFilter(url.searchParams.get('period_end'));
+    const periodFilter = { periodStart, periodEnd };
     await requireWorkspaceMember(request, organizationId, workspaceId);
     const supabase = createSupabaseServiceClient();
 
@@ -61,14 +63,15 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     if (usageError) throw usageError;
     if (eventsError) throw eventsError;
 
-    const findings = (findingRows ?? [])
-      .map((row): WorkspaceAnalyticsFinding => {
+    const findings = filterByAnalyticsPeriod(
+      (findingRows ?? []).map((row): WorkspaceAnalyticsFinding => {
         const customer = singleRelation<{
           id?: string;
           name?: string;
           segment?: string | null;
           billing_model?: string | null;
           contract_type?: string | null;
+          renewal_date?: string | null;
         }>(row.customers);
 
         return {
@@ -86,14 +89,35 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
           customerSegment: customer?.segment ?? null,
           billingModel: customer?.billing_model ?? null,
           contractType: customer?.contract_type ?? null,
+          customerRenewalDate: customer?.renewal_date ?? null,
           reviewerId: row.reviewer_user_id,
           reviewedAt: row.reviewed_at,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
           evidenceCoverageStatus: row.evidence_coverage_status
         };
-      })
-      .filter((finding) => isWithinPeriod(finding.updatedAt ?? finding.createdAt, periodStart, periodEnd));
+      }),
+      periodFilter,
+      (finding) => finding.updatedAt ?? finding.createdAt
+    );
+
+    const usage = filterByAnalyticsPeriod(
+      (usageRows ?? []).map((row) => {
+        const customer = singleRelation<{ name?: string }>(row.customers);
+        return {
+          id: row.id,
+          metricName: row.metric_name,
+          quantity: Number(row.quantity),
+          productLabel: row.product_label,
+          teamLabel: row.team_label,
+          periodStart: row.period_start,
+          periodEnd: row.period_end,
+          customerName: customer?.name ?? null
+        };
+      }),
+      periodFilter,
+      (row) => row.periodEnd ?? row.periodStart
+    );
 
     const analytics = buildWorkspaceAnalytics({
       findings,
@@ -110,19 +134,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
         reviewStatus: row.review_status,
         confidence: Number(row.confidence)
       })),
-      usage: (usageRows ?? []).map((row) => {
-        const customer = singleRelation<{ name?: string }>(row.customers);
-        return {
-          id: row.id,
-          metricName: row.metric_name,
-          quantity: Number(row.quantity),
-          productLabel: row.product_label,
-          teamLabel: row.team_label,
-          periodStart: row.period_start,
-          periodEnd: row.period_end,
-          customerName: customer?.name ?? null
-        };
-      }),
+      usage,
       auditEvents: (eventRows ?? []).map((row) => ({
         eventType: row.event_type,
         entityId: row.entity_id,
@@ -135,24 +147,6 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
   } catch (error) {
     return handleApiError(error);
   }
-}
-
-function parseOptionalDate(value: string | null): string | null {
-  if (!value) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
-    throw new Error('invalid_date_filter');
-  }
-  return value;
-}
-
-function isWithinPeriod(value: string | null | undefined, periodStart: string | null, periodEnd: string | null): boolean {
-  if (!periodStart && !periodEnd) return true;
-  if (!value) return false;
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return false;
-  if (periodStart && timestamp < Date.parse(`${periodStart}T00:00:00Z`)) return false;
-  if (periodEnd && timestamp > Date.parse(`${periodEnd}T23:59:59Z`)) return false;
-  return true;
 }
 
 function singleRelation<T>(value: T | T[] | null | undefined): T | null {

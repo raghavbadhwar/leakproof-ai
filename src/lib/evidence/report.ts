@@ -1,7 +1,8 @@
 import type { LeakageFinding } from '../leakage/types';
+import { customerFacingFindingStatuses, isCustomerFacingFindingStatus } from '../analytics/statuses';
 
 export const REPORT_VERSION = '2026-04-audit-grade-v1';
-export const CUSTOMER_FACING_REPORT_STATUSES = ['approved', 'customer_ready', 'recovered'] as const satisfies ReadonlyArray<
+export const CUSTOMER_FACING_REPORT_STATUSES = customerFacingFindingStatuses satisfies ReadonlyArray<
   LeakageFinding['status']
 >;
 
@@ -198,7 +199,7 @@ function countBy<T>(items: T[], keyFor: (item: T) => string): Record<string, num
 }
 
 function isCustomerFacingStatus(finding: ReportFinding): boolean {
-  return CUSTOMER_FACING_REPORT_STATUSES.includes(finding.status as (typeof CUSTOMER_FACING_REPORT_STATUSES)[number]);
+  return isCustomerFacingFindingStatus(finding.status);
 }
 
 function toCustomerFacingFinding(finding: ReportFinding): CustomerFacingReportFinding | null {

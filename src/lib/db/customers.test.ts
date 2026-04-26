@@ -104,6 +104,20 @@ describe('customer linking helpers', () => {
 
     await expect(assertCustomerBelongsToOrg(db, 'org_b', 'customer_a')).rejects.toThrow('forbidden');
   });
+
+  it('does not reuse normalized customer matches across organizations', async () => {
+    const db = new FakeCustomerDb([{ id: 'customer_a', organization_id: 'org_a', external_id: 'alpha', name: 'Alpha Retail Cloud Ltd.' }]);
+
+    const assignment = await findOrCreateCustomer(db, {
+      organizationId: 'org_b',
+      name: 'Alpha Retail Cloud'
+    });
+
+    expect(assignment).toMatchObject({ matchedBy: 'created', reviewNeeded: true });
+    expect(assignment.customerId).not.toBe('customer_a');
+    expect(db.customers).toHaveLength(2);
+    expect(db.customers[1]).toMatchObject({ organization_id: 'org_b', name: 'Alpha Retail Cloud' });
+  });
 });
 
 class FakeCustomerDb {

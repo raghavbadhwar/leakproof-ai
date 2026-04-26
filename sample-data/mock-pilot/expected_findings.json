@@ -1,0 +1,65 @@
+{
+  "dataset_id": "mock_pilot_revenue_leakage_v1",
+  "expected_total_leakage_minor": 2669000,
+  "expected_total_leakage_usd": 26690,
+  "currency": "USD",
+  "customers": [
+    {
+      "customer_external_id": "alpha",
+      "customer_name": "Alpha Retail Cloud Ltd.",
+      "expected_findings": [
+        { "type": "minimum_commitment_shortfall", "amount_minor": 200000, "currency": "USD" },
+        { "type": "usage_overage_unbilled", "amount_minor": 25000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "beta",
+      "customer_name": "Beta Health Ops Inc.",
+      "expected_findings": [
+        { "type": "seat_underbilling", "amount_minor": 160000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "cobalt",
+      "customer_name": "Cobalt API Co.",
+      "expected_findings": [
+        { "type": "usage_overage_unbilled", "amount_minor": 240000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "delta",
+      "customer_name": "Delta Media Group",
+      "expected_findings": [
+        { "type": "expired_discount_still_applied", "amount_minor": 240000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "evergreen",
+      "customer_name": "Evergreen Analytics LLC.",
+      "expected_findings": [
+        { "type": "missed_annual_uplift", "amount_minor": 378000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "fjord",
+      "customer_name": "Fjord Support Services",
+      "expected_findings": [
+        { "type": "minimum_commitment_shortfall", "amount_minor": 500000, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "helio",
+      "customer_name": "Helio Learning Systems",
+      "expected_findings": [
+        { "type": "missed_annual_uplift", "amount_minor": 694500, "currency": "USD" }
+      ]
+    },
+    {
+      "customer_external_id": "ion",
+      "customer_name": "Ion Logistics Platform",
+      "expected_findings": [
+        { "type": "usage_overage_unbilled", "amount_minor": 231500, "currency": "USD" }
+      ]
+    }
+  ]
+}

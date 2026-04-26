@@ -1,16 +1,21 @@
-export const customerFacingFindingStatuses = ['approved', 'customer_ready', 'recovered'] as const;
-export const internalPipelineFindingStatuses = ['draft', 'needs_review'] as const;
-export const closedReviewFindingStatuses = ['dismissed', 'not_recoverable'] as const;
+import {
+  customerFacingFindingStatuses,
+  internalPipelineFindingStatuses,
+  isClosedReviewFindingStatus,
+  isCustomerFacingFindingStatus,
+  isInternalPipelineFindingStatus,
+  labelizeStatus,
+  type FindingStatus
+} from './statuses';
 
-export type FindingStatus =
-  | 'draft'
-  | 'needs_review'
-  | 'approved'
-  | 'dismissed'
-  | 'customer_ready'
-  | 'recovered'
-  | 'not_recoverable'
-  | string;
+export {
+  closedReviewFindingStatuses,
+  customerFacingFindingStatuses,
+  internalPipelineFindingStatuses,
+  isCustomerFacingFindingStatus,
+  isInternalPipelineFindingStatus,
+  type FindingStatus
+} from './statuses';
 
 export type WorkspaceAnalyticsFinding = {
   id: string;
@@ -27,6 +32,7 @@ export type WorkspaceAnalyticsFinding = {
   customerSegment?: string | null;
   billingModel?: string | null;
   contractType?: string | null;
+  customerRenewalDate?: string | null;
   reviewerId?: string | null;
   reviewedAt?: string | null;
   createdAt?: string | null;
@@ -100,6 +106,8 @@ export type WorkspaceAnalyticsPayload = {
     bySegment: AnalyticsPoint[];
     byBillingModel: AnalyticsPoint[];
     trend: AnalyticsTrendPoint[];
+    discountTrend: AnalyticsTrendPoint[];
+    upliftTrend: AnalyticsTrendPoint[];
     recoveryPerformance: AnalyticsTrendPoint[];
     concentrationRisk: AnalyticsPoint[];
   };
@@ -135,11 +143,11 @@ export type WorkspaceAnalyticsPayload = {
 };
 
 export function isCustomerFacingStatus(status: string): boolean {
-  return customerFacingFindingStatuses.includes(status as (typeof customerFacingFindingStatuses)[number]);
+  return isCustomerFacingFindingStatus(status);
 }
 
 export function isInternalPipelineStatus(status: string): boolean {
-  return internalPipelineFindingStatuses.includes(status as (typeof internalPipelineFindingStatuses)[number]);
+  return isInternalPipelineFindingStatus(status);
 }
 
 export function buildWorkspaceAnalytics(input: {
@@ -153,7 +161,7 @@ export function buildWorkspaceAnalytics(input: {
   const findings = input.findings;
   const customerFacing = findings.filter((finding) => isCustomerFacingStatus(finding.status));
   const internalPipeline = findings.filter((finding) => isInternalPipelineStatus(finding.status));
-  const reviewable = findings.filter((finding) => isInternalPipelineStatus(finding.status) || closedReviewFindingStatuses.includes(finding.status as never));
+  const reviewable = findings.filter((finding) => isInternalPipelineStatus(finding.status) || isClosedReviewFindingStatus(finding.status));
   const currency = customerFacing[0]?.currency ?? findings[0]?.currency ?? 'USD';
 
   return {
@@ -169,12 +177,14 @@ export function buildWorkspaceAnalytics(input: {
       recoveredLeakageMinor: sumAmount(customerFacing.filter((finding) => finding.status === 'recovered')),
       findingCount: customerFacing.length,
       byCategory: groupAmount(customerFacing, (finding) => labelize(finding.findingType)),
-      byCustomer: groupAmount(customerFacing, (finding) => finding.customerName ?? 'Unassigned customer'),
-      bySegment: groupAmount(customerFacing, (finding) => finding.customerSegment ?? 'Unsegmented'),
-      byBillingModel: groupAmount(customerFacing, (finding) => finding.billingModel ?? 'Unknown billing model'),
-      trend: buildTrend(findings),
-      recoveryPerformance: buildTrend(findings),
-      concentrationRisk: groupAmount(customerFacing, (finding) => finding.customerName ?? 'Unassigned customer').slice(0, 10)
+      byCustomer: groupAmount(withDimension(customerFacing, (finding) => finding.customerName), (finding) => finding.customerName as string),
+      bySegment: groupAmount(withDimension(customerFacing, (finding) => finding.customerSegment), (finding) => finding.customerSegment as string),
+      byBillingModel: groupAmount(withDimension(customerFacing, (finding) => finding.billingModel), (finding) => finding.billingModel as string),
+      trend: buildTrend(customerFacing),
+      discountTrend: buildTrend(customerFacing.filter((finding) => /discount/i.test(finding.findingType))),
+      upliftTrend: buildTrend(customerFacing.filter((finding) => /uplift/i.test(finding.findingType))),
+      recoveryPerformance: buildTrend(customerFacing),
+      concentrationRisk: groupAmount(withDimension(customerFacing, (finding) => finding.customerName), (finding) => finding.customerName as string).slice(0, 10)
     },
     internalPipeline: {
       label: 'Internal pipeline',
@@ -184,9 +194,9 @@ export function buildWorkspaceAnalytics(input: {
       findingCount: internalPipeline.length,
       needsReviewCount: internalPipeline.filter((finding) => finding.status === 'needs_review').length,
       byCategory: groupAmount(internalPipeline, (finding) => labelize(finding.findingType)),
-      byStatus: groupCount(internalPipeline, (finding) => labelize(finding.status)),
-      byContractType: groupAmount(internalPipeline, (finding) => finding.contractType ?? 'Unknown contract type'),
-      trend: buildTrend(findings),
+      byStatus: groupCount(internalPipeline, (finding) => labelizeStatus(finding.status)),
+      byContractType: groupAmount(withDimension(internalPipeline, (finding) => finding.contractType), (finding) => finding.contractType as string),
+      trend: buildTrend(internalPipeline),
       topUnapproved: internalPipeline
         .slice()
         .sort((a, b) => b.amountMinor - a.amountMinor)
@@ -196,7 +206,7 @@ export function buildWorkspaceAnalytics(input: {
     reviewBurden: {
       label: 'Needs finance review',
       description: 'Includes draft, needs-review, dismissed, and not-recoverable workflow outcomes for internal audit operations.',
-      allStatuses: groupCount(findings, (finding) => labelize(finding.status)),
+      allStatuses: groupCount(findings, (finding) => labelizeStatus(finding.status)),
       confidenceDistribution: confidenceBuckets(reviewable.length > 0 ? reviewable : findings),
       evidenceCoverage: groupCount(findings, (finding) => labelize(finding.evidenceCoverageStatus ?? 'pending')),
       reviewerWorkload: groupCount(
@@ -207,12 +217,19 @@ export function buildWorkspaceAnalytics(input: {
     },
     operations: {
       documentPipeline: documentPipeline(input.documents ?? []),
-      contractHealth: contractHealth(input.terms ?? []),
+      contractHealth: contractHealth(input.documents ?? [], input.terms ?? []),
       usageVariance: usageVariance(input.usage ?? []),
-      renewalCalendar: renewalCalendar(input.terms ?? []),
+      renewalCalendar: renewalCalendar(findings),
       recurringPatterns: groupCount(findings, (finding) => labelize(finding.findingType)).slice(0, 10)
     }
   };
+}
+
+function withDimension<T>(items: T[], dimensionFor: (item: T) => string | null | undefined): T[] {
+  return items.filter((item) => {
+    const value = dimensionFor(item);
+    return typeof value === 'string' && value.trim().length > 0;
+  });
 }
 
 function sumAmount(findings: WorkspaceAnalyticsFinding[]): number {
@@ -289,6 +306,8 @@ function confidenceBuckets(findings: WorkspaceAnalyticsFinding[]): AnalyticsPoin
 }
 
 function documentPipeline(documents: WorkspaceAnalyticsDocument[]): AnalyticsPoint[] {
+  if (documents.length === 0) return [];
+
   const uploaded = documents.length;
   const parsed = documents.filter((document) => document.parseStatus === 'parsed').length;
   const chunked = documents.filter((document) => document.chunkingStatus === 'chunked').length;
@@ -302,14 +321,18 @@ function documentPipeline(documents: WorkspaceAnalyticsDocument[]): AnalyticsPoi
   ];
 }
 
-function contractHealth(terms: WorkspaceAnalyticsTerm[]): AnalyticsPoint[] {
+function contractHealth(documents: WorkspaceAnalyticsDocument[], terms: WorkspaceAnalyticsTerm[]): AnalyticsPoint[] {
+  if (documents.length === 0 && terms.length === 0) return [];
+
   const approved = terms.filter((term) => ['approved', 'edited'].includes(term.reviewStatus)).length;
   const pending = terms.filter((term) => ['extracted', 'needs_review'].includes(term.reviewStatus)).length;
   const rejected = terms.filter((term) => term.reviewStatus === 'rejected').length;
   const lowConfidence = terms.filter((term) => term.confidence < 0.65).length;
   const renewalTerms = terms.filter((term) => /renewal|notice|contract_end/i.test(term.termType)).length;
+  const contracts = documents.filter((document) => document.documentType === 'contract').length;
 
   return [
+    { label: 'Contract documents', value: contracts, count: contracts },
     { label: 'Terms approved', value: approved, count: approved },
     { label: 'Pending review', value: pending, count: pending },
     { label: 'Rejected terms', value: rejected, count: rejected },
@@ -322,9 +345,9 @@ function usageVariance(usage: WorkspaceAnalyticsUsage[]): AnalyticsPoint[] {
   return groupUsage(usage, (row) => row.productLabel ?? row.teamLabel ?? row.metricName).slice(0, 12);
 }
 
-function renewalCalendar(terms: WorkspaceAnalyticsTerm[]): AnalyticsPoint[] {
-  const renewalTerms = terms.filter((term) => /renewal|notice|contract_end/i.test(term.termType));
-  return groupCount(renewalTerms, (term) => labelize(term.termType));
+function renewalCalendar(findings: WorkspaceAnalyticsFinding[]): AnalyticsPoint[] {
+  const findingsWithRenewalDates = withDimension(findings, (finding) => finding.customerRenewalDate);
+  return groupCount(findingsWithRenewalDates, (finding) => monthKey(finding.customerRenewalDate));
 }
 
 function groupUsage(items: WorkspaceAnalyticsUsage[], keyFor: (item: WorkspaceAnalyticsUsage) => string): AnalyticsPoint[] {

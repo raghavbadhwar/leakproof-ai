@@ -63,6 +63,17 @@ export async function POST(request: Request) {
       }
     });
 
+    await writeAuditEvent(supabase, {
+      organizationId: organization.id,
+      actorUserId: user.id,
+      eventType: 'member_added',
+      entityType: 'organization_member',
+      metadata: {
+        role: 'owner',
+        target_user_id: user.id
+      }
+    });
+
     return NextResponse.json({ organization });
   } catch (error) {
     return handleApiError(error);
