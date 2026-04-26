@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { User } from '@supabase/supabase-js';
 import { createSupabaseAnonClient, createSupabaseServiceClient } from './supabaseServer';
+import { assertWorkspaceRowBelongsToOrganization } from './boundaries';
 import { assertRoleAllowed, type OrganizationRole } from './roles';
 
 export type RequestAuthContext = {
@@ -77,16 +78,7 @@ export async function requireWorkspaceRole(
 
 export async function assertWorkspaceBelongsToOrganization(organizationId: string, workspaceId: string): Promise<void> {
   const supabase = createSupabaseServiceClient();
-  const { data, error } = await supabase
-    .from('audit_workspaces')
-    .select('id')
-    .eq('id', workspaceId)
-    .eq('organization_id', organizationId)
-    .maybeSingle();
-
-  if (error || !data) {
-    throw new Error('forbidden');
-  }
+  await assertWorkspaceRowBelongsToOrganization(supabase, organizationId, workspaceId);
 }
 
 function bearerToken(request: Request): string | null {

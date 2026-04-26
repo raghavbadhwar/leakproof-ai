@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { runExtractionSchema } from '@/lib/api/schemas';
 import { handleApiError, jsonError } from '@/lib/api/responses';
 import { extractContractTerms } from '@/lib/agents/contractExtractor';
 import { buildContractTermLogicalKey } from '@/lib/audit/runVersions';
+import { sanitizeOperationalErrorMessage } from '@/lib/audit/auditEvents';
 import { writeAuditEvent } from '@/lib/db/audit';
 import { requireWorkspaceRole } from '@/lib/db/auth';
 import { findOrCreateCustomer } from '@/lib/db/customers';
@@ -16,6 +18,11 @@ export async function POST(request: Request) {
   try {
     const body = runExtractionSchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, body.workspace_id, REVIEWER_WRITE_ROLES);
+    enforceRateLimit({
+      key: `extraction:${auth.userId}:${body.organization_id}:${body.workspace_id}`,
+      limit: 5,
+      windowMs: 10 * 60 * 1000
+    });
     const supabase = createSupabaseServiceClient();
 
     const { data: document, error: documentError } = await supabase
@@ -229,7 +236,7 @@ export async function POST(request: Request) {
         .from('extraction_runs')
         .update({
           status: 'failed',
-          error_message: runError instanceof Error ? runError.message : 'Extraction run failed.',
+          error_message: sanitizeOperationalErrorMessage(runError, 'Extraction run failed.'),
           completed_at: new Date().toISOString()
         })
         .eq('id', extractionRun.id)
@@ -243,7 +250,7 @@ export async function POST(request: Request) {
         entityId: extractionRun.id,
         metadata: {
           source_document_id: document.id,
-          reason: runError instanceof Error ? runError.message : 'Extraction run failed.'
+          reason: sanitizeOperationalErrorMessage(runError, 'Extraction run failed.')
         }
       });
 

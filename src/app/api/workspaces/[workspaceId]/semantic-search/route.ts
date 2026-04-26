@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { semanticSearchSchema } from '@/lib/api/schemas';
 import { handleApiError } from '@/lib/api/responses';
 import { embedGeminiContent } from '@/lib/ai/geminiClient';
@@ -22,6 +23,11 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const { workspaceId } = await context.params;
     const body = semanticSearchSchema.parse(await request.json());
     const auth = await requireWorkspaceMember(request, body.organization_id, workspaceId);
+    enforceRateLimit({
+      key: `semantic-search:${auth.userId}:${body.organization_id}:${workspaceId}`,
+      limit: 30,
+      windowMs: 60 * 1000
+    });
     const supabase = createSupabaseServiceClient();
     const embedding = await embedGeminiContent({ content: body.query, taskType: 'RETRIEVAL_QUERY' });
 

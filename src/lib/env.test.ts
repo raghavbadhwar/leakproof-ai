@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { validateServerEnvObject } from './env';
 
@@ -20,5 +22,16 @@ describe('environment validation', () => {
     });
 
     expect(env.SUPABASE_SERVICE_ROLE_KEY).toBe('service-role-key');
+  });
+
+  it('keeps service-role and Gemini secrets out of client modules', () => {
+    const clientEntryPoints = [
+      'src/lib/db/supabaseBrowser.ts',
+      'src/components/audit/RevenueAuditWorkspace.tsx',
+      'src/app/login/page.tsx'
+    ];
+    const combinedClientSource = clientEntryPoints.map((file) => readFileSync(join(process.cwd(), file), 'utf8')).join('\n');
+
+    expect(combinedClientSource).not.toMatch(/SUPABASE_SERVICE_ROLE_KEY|GEMINI_API_KEY|getServerEnv|supabaseServer|geminiClient/);
   });
 });

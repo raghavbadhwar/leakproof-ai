@@ -5,6 +5,7 @@ export type UploadValidationInput = {
   fileName: string;
   mimeType: string;
   sizeBytes: number;
+  signature?: Uint8Array;
 };
 
 export type UploadValidationResult =
@@ -51,6 +52,11 @@ export function validateUpload(input: UploadValidationInput): UploadValidationRe
     return { ok: false, reason: `${input.mimeType || 'Unknown file type'} is not allowed.` };
   }
 
+  const signatureResult = validateFileSignature(input);
+  if (!signatureResult.ok) {
+    return signatureResult;
+  }
+
   return { ok: true };
 }
 
@@ -86,4 +92,45 @@ function sanitizeFileName(fileName: string): string {
     .replace(/^-+|-+$/g, '');
 
   return `${base || 'upload'}${extension ? `.${extension}` : ''}`;
+}
+
+function validateFileSignature(input: UploadValidationInput): UploadValidationResult {
+  if (!input.signature?.length) {
+    return { ok: true };
+  }
+
+  const extension = getExtension(input.fileName);
+  const bytes = Array.from(input.signature.slice(0, 16));
+
+  if (extension === 'pdf' || input.mimeType === 'application/pdf') {
+    return startsWithBytes(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])
+      ? { ok: true }
+      : { ok: false, reason: 'The uploaded PDF signature is invalid.' };
+  }
+
+  if (extension === 'png' || input.mimeType === 'image/png') {
+    return startsWithBytes(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+      ? { ok: true }
+      : { ok: false, reason: 'The uploaded PNG signature is invalid.' };
+  }
+
+  if (extension === 'jpg' || extension === 'jpeg' || input.mimeType === 'image/jpeg') {
+    return startsWithBytes(bytes, [0xff, 0xd8, 0xff])
+      ? { ok: true }
+      : { ok: false, reason: 'The uploaded JPEG signature is invalid.' };
+  }
+
+  if (extension === 'docx' || input.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+    return startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]) ||
+      startsWithBytes(bytes, [0x50, 0x4b, 0x05, 0x06]) ||
+      startsWithBytes(bytes, [0x50, 0x4b, 0x07, 0x08])
+      ? { ok: true }
+      : { ok: false, reason: 'The uploaded DOCX signature is invalid.' };
+  }
+
+  return { ok: true };
+}
+
+function startsWithBytes(bytes: number[], expected: number[]): boolean {
+  return expected.every((byte, index) => bytes[index] === byte);
 }

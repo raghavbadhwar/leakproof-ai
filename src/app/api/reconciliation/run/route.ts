@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { runReconciliationSchema } from '@/lib/api/schemas';
 import { handleApiError } from '@/lib/api/responses';
+import { sanitizeOperationalErrorMessage } from '@/lib/audit/auditEvents';
 import { buildFindingLogicalKey, readFindingPeriod } from '@/lib/audit/runVersions';
 import { writeAuditEvent } from '@/lib/db/audit';
 import { requireWorkspaceRole } from '@/lib/db/auth';
@@ -15,6 +17,11 @@ export async function POST(request: Request) {
   try {
     const body = runReconciliationSchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, body.workspace_id, REVIEWER_WRITE_ROLES);
+    enforceRateLimit({
+      key: `reconciliation:${auth.userId}:${body.organization_id}:${body.workspace_id}`,
+      limit: 5,
+      windowMs: 10 * 60 * 1000
+    });
     const supabase = createSupabaseServiceClient();
 
     const { data: latestRun, error: latestRunError } = await supabase
@@ -206,7 +213,7 @@ export async function POST(request: Request) {
         .from('reconciliation_runs')
         .update({
           status: 'failed',
-          error_message: runError instanceof Error ? runError.message : 'Reconciliation run failed.',
+          error_message: sanitizeOperationalErrorMessage(runError, 'Reconciliation run failed.'),
           completed_at: new Date().toISOString()
         })
         .eq('id', reconciliationRun.id)
@@ -219,7 +226,7 @@ export async function POST(request: Request) {
         entityType: 'reconciliation_run',
         entityId: reconciliationRun.id,
         metadata: {
-          reason: runError instanceof Error ? runError.message : 'Reconciliation run failed.'
+          reason: sanitizeOperationalErrorMessage(runError, 'Reconciliation run failed.')
         }
       });
 

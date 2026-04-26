@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { workspaceScopedBodySchema } from '@/lib/api/schemas';
 import { handleApiError } from '@/lib/api/responses';
 import { validateAiConfig } from '@/lib/ai/config';
 import { embedGeminiContent } from '@/lib/ai/geminiClient';
 import { writeAuditEvent } from '@/lib/db/audit';
 import { requireWorkspaceRole } from '@/lib/db/auth';
+import { assertSourceDocumentBelongsToWorkspace } from '@/lib/db/boundaries';
 import { REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { getServerEnv } from '@/lib/env';
@@ -16,7 +18,17 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const { workspaceId, documentId } = await context.params;
     const body = workspaceScopedBodySchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, workspaceId, REVIEWER_WRITE_ROLES);
+    enforceRateLimit({
+      key: `embedding:${auth.userId}:${body.organization_id}:${workspaceId}`,
+      limit: 5,
+      windowMs: 10 * 60 * 1000
+    });
     const supabase = createSupabaseServiceClient();
+    await assertSourceDocumentBelongsToWorkspace(supabase, {
+      organizationId: body.organization_id,
+      workspaceId,
+      documentId
+    });
     const aiConfig = validateAiConfig(getServerEnv());
 
     const { data: chunks, error: chunksError } = await supabase
@@ -97,7 +109,8 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
       .from('source_documents')
       .update({ embedding_status: embeddedCount > 0 ? 'embedded' : 'unsupported', updated_at: new Date().toISOString() })
       .eq('id', documentId)
-      .eq('organization_id', body.organization_id);
+      .eq('organization_id', body.organization_id)
+      .eq('workspace_id', workspaceId);
 
     await writeAuditEvent(supabase, {
       organizationId: body.organization_id,

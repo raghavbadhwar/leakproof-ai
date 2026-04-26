@@ -38,6 +38,12 @@ export type AuditEventType =
   | 'report.generated'
   | 'report.exported'
   | 'role.changed'
+  | 'invite_created'
+  | 'invite_cancelled'
+  | 'member_added'
+  | 'member_removed'
+  | 'member_role_changed'
+  | 'finding_assigned'
   | 'view.loaded';
 
 const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
@@ -79,7 +85,13 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'evidence_item.removed',
   'report.generated',
   'report.exported',
-  'role.changed'
+  'role.changed',
+  'invite_created',
+  'invite_cancelled',
+  'member_added',
+  'member_removed',
+  'member_role_changed',
+  'finding_assigned'
 ]);
 
 const SENSITIVE_METADATA_KEYS = [
@@ -92,10 +104,20 @@ const SENSITIVE_METADATA_KEYS = [
   /secret/i,
   /token/i,
   /full_content/i,
+  /content/i,
+  /excerpt/i,
   /embedding/i,
   /email/i,
   /query/i,
-  /model_response/i
+  /model_response/i,
+  /model_output/i,
+  /response/i,
+  /^note$/i,
+  /reviewer_note/i,
+  /review_note/i,
+  /citation/i,
+  /row_citation/i,
+  /term_value/i
 ];
 
 export function shouldWriteAuditEvent(eventType: AuditEventType | string): boolean {
@@ -103,10 +125,44 @@ export function shouldWriteAuditEvent(eventType: AuditEventType | string): boole
 }
 
 export function redactAuditMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(metadata).map(([key, value]) => [
-      key,
-      SENSITIVE_METADATA_KEYS.some((pattern) => pattern.test(key)) ? '[redacted]' : value
-    ])
-  );
+  return redactRecord(metadata);
+}
+
+export function sanitizeOperationalErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message) return fallback;
+
+  if (/gemini|google|model|prompt|response|content|contract|invoice|embedding|api[_-]?key|secret|token/i.test(message)) {
+    return fallback;
+  }
+
+  return message.slice(0, 240);
+}
+
+function redactRecord(metadata: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(metadata).map(([key, value]) => [key, redactValue(key, value)]));
+}
+
+function redactValue(key: string, value: unknown): unknown {
+  if (SENSITIVE_METADATA_KEYS.some((pattern) => pattern.test(key))) {
+    return '[redacted]';
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactNestedValue(item));
+  }
+
+  return redactNestedValue(value);
+}
+
+function redactNestedValue(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  return redactRecord(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

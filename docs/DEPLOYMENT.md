@@ -30,6 +30,15 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY` or `GEMINI_API_KEY` in browser code. Th
 
 See `docs/ENV_CHECKLIST.md` for the full env and security checklist.
 
+## Security controls
+
+- Keep `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` in Vercel server environment variables only.
+- Confirm response headers include CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, and `Permissions-Policy`.
+- Sensitive workflow routes have in-process rate limits for upload, extraction, embedding, semantic search, and reconciliation. For multi-instance production traffic, back these limits with a shared store such as Vercel KV, Upstash, or Supabase before opening broad customer access.
+- Uploads must pass extension, MIME, size, and magic-byte checks for PDFs, DOCX, PNG, and JPEG files.
+- Server audit metadata is redacted before persistence. Do not add raw contract text, invoice rows, embeddings, prompts, model responses, excerpts, notes, secrets, or tokens to audit metadata or operational errors.
+- Login success/failure events are not server-audited yet because sign-in is handled directly by Supabase Auth in the browser. Add Supabase Auth hooks or a server-side auth callback before treating auth-event audit coverage as complete.
+
 ## Supabase setup
 
 1. Create a new Supabase project for LeakProof AI.
@@ -39,6 +48,7 @@ See `docs/ENV_CHECKLIST.md` for the full env and security checklist.
 5. Confirm `vector` extension, `document_chunks`, `document_embeddings`, and `match_document_chunks` exist.
 6. Confirm RLS is enabled on all public tenant tables.
 7. Configure Supabase Auth email sign-in and set the site URL to the deployed Vercel URL.
+8. Service-role API routes intentionally bypass RLS after server-side bearer-token, org, workspace, and role checks. Keep this pattern limited to API routes and server-only modules.
 
 ## Required live verification
 
@@ -53,7 +63,9 @@ Do not mark external-service features complete from local tests alone. Complete 
 7. Embed document chunks with Gemini Embedding 2 and confirm pgvector semantic search returns tenant-scoped results.
 8. Generate a report and confirm only approved/customer-ready findings and approved evidence appear.
 9. Export the report and confirm `report.exported` is audit logged.
-10. Open the deployed Vercel app in a browser and confirm no critical console errors.
+10. Verify upload, extraction, embedding, semantic search, and reconciliation throttling returns HTTP 429 after repeated rapid calls.
+11. Open the deployed Vercel app in a browser and confirm no critical console errors.
+12. Inspect deployed response headers and confirm CSP/frame/content-type/referrer/permissions headers are present.
 
 ## Vercel setup
 

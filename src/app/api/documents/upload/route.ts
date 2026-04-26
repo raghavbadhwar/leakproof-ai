@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { uploadMetadataSchema } from '@/lib/api/schemas';
 import { handleApiError, jsonError } from '@/lib/api/responses';
 import { writeAuditEvent } from '@/lib/db/audit';
@@ -14,8 +15,15 @@ import { buildTenantStoragePath, validateUpload } from '@/lib/uploads/validation
 
 export const runtime = 'nodejs';
 
+const MAX_FORM_CONTENT_LENGTH_BYTES = 26 * 1024 * 1024;
+
 export async function POST(request: Request) {
   try {
+    const contentLength = Number(request.headers.get('content-length') ?? 0);
+    if (contentLength > MAX_FORM_CONTENT_LENGTH_BYTES) {
+      return jsonError('Files must be 25 MB or smaller.', 413);
+    }
+
     const form = await request.formData();
     const file = form.get('file');
     if (!(file instanceof File)) {
@@ -32,12 +40,19 @@ export async function POST(request: Request) {
       domain: form.get('domain') || undefined
     });
     const auth = await requireWorkspaceRole(request, metadata.organization_id, metadata.workspace_id, REVIEWER_WRITE_ROLES);
+    enforceRateLimit({
+      key: `upload:${auth.userId}:${metadata.organization_id}:${metadata.workspace_id}`,
+      limit: 10,
+      windowMs: 10 * 60 * 1000
+    });
 
+    const bytes = Buffer.from(await file.arrayBuffer());
     const validation = validateUpload({
       documentType: metadata.document_type,
       fileName: file.name,
       mimeType: file.type,
-      sizeBytes: file.size
+      sizeBytes: file.size,
+      signature: bytes.subarray(0, 16)
     });
     if (!validation.ok) {
       return jsonError(validation.reason, 400);
@@ -50,7 +65,6 @@ export async function POST(request: Request) {
       documentType: metadata.document_type,
       fileName: file.name
     });
-    const bytes = Buffer.from(await file.arrayBuffer());
     const checksum = createHash('sha256').update(bytes).digest('hex');
     const extractedContractText =
       metadata.document_type === 'contract'

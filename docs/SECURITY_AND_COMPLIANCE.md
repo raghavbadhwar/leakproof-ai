@@ -10,11 +10,15 @@ Contracts and invoices are sensitive. Build trust from day one.
 - Server-side authorization checks on every API route.
 - File type allowlist.
 - File size limits.
+- Magic-byte validation for PDFs, DOCX, PNG, and JPEG uploads.
+- Security headers for CSP, clickjacking, content sniffing, referrer leakage, and browser permissions.
+- Route-level throttling for upload, extraction, embedding, search, and reconciliation.
 - Virus scanning when production volume justifies it.
 - No secrets committed to repo.
 - No raw contracts in logs.
 - No invoice content in error messages.
 - Audit events for uploads, extraction, reconciliation, status changes, and exports.
+- Auth success/failure audit hooks before enterprise launch.
 - Human approval before draft emails or invoice notes are used externally.
 
 ## AI safety requirements
@@ -54,4 +58,4 @@ Default MVP policy:
 - The app displays findings without evidence.
 - The app sends customer emails automatically.
 - Uploads allow arbitrary executable files.
-
+- Sensitive routes can be spammed without shared production rate limits.
