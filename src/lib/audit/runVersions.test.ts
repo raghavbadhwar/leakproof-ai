@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { generateExecutiveAuditReport, type ReportFinding } from '@/lib/evidence/report';
-import { buildWorkspaceAnalytics, type WorkspaceAnalyticsFinding } from '@/lib/analytics/workspaceAnalytics';
+import { buildWorkspaceAnalytics, type WorkspaceAnalyticsFinding } from '../analytics/workspaceAnalytics';
+import { generateExecutiveAuditReport, type ReportFinding } from '../evidence/report';
 import {
   activeCompletedRuns,
   activeLatestRows,
@@ -8,7 +8,7 @@ import {
   buildFindingLogicalKey,
   readFindingPeriod
 } from './runVersions';
-import type { LeakageFinding } from '@/lib/leakage/types';
+import type { LeakageFinding } from '../leakage/types';
 
 describe('audit run idempotency helpers', () => {
   it('keeps a second reconciliation run from doubling customer-facing totals', () => {
