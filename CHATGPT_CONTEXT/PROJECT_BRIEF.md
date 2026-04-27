@@ -45,6 +45,7 @@ Primary operators:
 - Missed annual uplift.
 - Renewal or notice-window risk.
 - Conflicting amendment risk.
+- Payment terms mismatch risk.
 
 ## Non-Goals
 
@@ -58,4 +59,4 @@ Primary operators:
 
 ## Trust Rules
 
-Every money claim must have source evidence, deterministic calculation, and human approval.
+Every money claim must have source evidence, deterministic calculation, and human approval. Risk-only findings must be clearly labeled and kept separate from recoverable leakage totals.

@@ -44,8 +44,10 @@ Key files:
 - src/lib/ingest/documentText.ts
 - src/lib/db/auth.ts
 - src/lib/db/roles.ts
+- src/lib/db/customers.ts
+- src/lib/audit/runVersions.ts
 - supabase/migrations/001_initial_schema.sql
 
 Current state:
-Local tests, typecheck, lint, build, and smoke pass. Live Supabase/Gemini/Vercel verification is blocked until real env vars and projects are configured.
+Repo-side implementation is a pre-production candidate. Period-aware reconciliation, customer/account linking, idempotent reruns, payment terms mismatch, evidence approval gating, and server-side scanned PDF/image extraction paths exist. Production is not complete until `pnpm production:gate`, deployed smoke, mock audit total `USD 26,690`, and owner/admin/reviewer/viewer live QA pass against real Supabase/Gemini/Vercel setup.
 ```
