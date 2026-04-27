@@ -22,6 +22,19 @@ describe('evidence candidates', () => {
     expect(citation.excerpt).toBe('Invoice line item with extra spacing.');
   });
 
+  it('keeps page-aware chunk labels visible on evidence candidates', () => {
+    const citation = citationForEvidenceCandidate({
+      documentType: 'contract',
+      chunkId: '22222222-2222-4222-8222-222222222222',
+      sourceLabel: 'Page 4, chunk 2',
+      content: 'Invoices are payable Net 30 from invoice date.'
+    });
+
+    expect(citation.sourceType).toBe('contract');
+    expect(citation.label).toBe('Page 4, chunk 2');
+    expect(citation.excerpt).toBe('Invoices are payable Net 30 from invoice date.');
+  });
+
   it('truncates long excerpts for review UI and audit metadata', () => {
     expect(excerptForEvidence('x'.repeat(700))).toHaveLength(500);
   });

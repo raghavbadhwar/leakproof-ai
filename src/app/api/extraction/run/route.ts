@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   try {
     const body = runExtractionSchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, body.workspace_id, REVIEWER_WRITE_ROLES);
-    enforceRateLimit({
+    await enforceRateLimit({
       key: `extraction:${auth.userId}:${body.organization_id}:${body.workspace_id}`,
       limit: 5,
       windowMs: 10 * 60 * 1000

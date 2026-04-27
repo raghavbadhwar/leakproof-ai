@@ -36,6 +36,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .update({
         approval_state: approvalState,
         attached_evidence_item_id: evidenceItemId,
+        attached_at: body.action === 'approve' ? reviewedAt : null,
         reviewed_by: auth.userId,
         review_note: body.note,
         reviewed_at: reviewedAt,

@@ -18,7 +18,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const { workspaceId, documentId } = await context.params;
     const body = workspaceScopedBodySchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, workspaceId, REVIEWER_WRITE_ROLES);
-    enforceRateLimit({
+    await enforceRateLimit({
       key: `embedding:${auth.userId}:${body.organization_id}:${workspaceId}`,
       limit: 5,
       windowMs: 10 * 60 * 1000

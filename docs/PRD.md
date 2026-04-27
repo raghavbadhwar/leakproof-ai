@@ -285,7 +285,9 @@ Finding statuses:
 - Let reviewers approve, reject, and remove evidence.
 - Keep evidence candidates separate from approved evidence items.
 - Track evidence coverage: `pending`, `complete`, `weak`, `conflicting`.
-- Reports must use approved evidence only.
+- Reports must use reviewer-approved evidence only. System-created reconciliation evidence starts as `suggested` and is excluded from customer-facing exports until approved by a reviewer.
+- Recoverable money findings must have approved contract evidence, approved invoice or usage evidence, a deterministic formula, and input values before export.
+- Risk-only findings may export with approved contract-only evidence, but the report must label them as risk-only.
 
 ### 8.9 Reports
 

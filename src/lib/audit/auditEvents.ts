@@ -40,6 +40,7 @@ export type AuditEventType =
   | 'role.changed'
   | 'invite_created'
   | 'invite_cancelled'
+  | 'invite_accepted'
   | 'member_added'
   | 'member_removed'
   | 'member_role_changed'
@@ -88,6 +89,7 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'role.changed',
   'invite_created',
   'invite_cancelled',
+  'invite_accepted',
   'member_added',
   'member_removed',
   'member_role_changed',
@@ -97,22 +99,32 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
 const SENSITIVE_METADATA_KEYS = [
   /raw.*contract/i,
   /raw.*invoice/i,
+  /contract.*text/i,
+  /contract.*content/i,
+  /invoice.*text/i,
+  /invoice.*content/i,
   /invoice_rows?/i,
   /contract_text/i,
   /prompt/i,
   /api[_-]?key/i,
+  /authorization/i,
   /secret/i,
   /token/i,
+  /session/i,
   /full_content/i,
   /content/i,
   /excerpt/i,
   /embedding/i,
+  /vector/i,
   /email/i,
   /query/i,
+  /llm_response/i,
+  /llm_output/i,
   /model_response/i,
   /model_output/i,
   /response/i,
-  /^note$/i,
+  /^notes?$/i,
+  /free.*text/i,
   /reviewer_note/i,
   /review_note/i,
   /citation/i,

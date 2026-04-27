@@ -12,6 +12,7 @@ export async function extractContractTerms(input: {
   sourceDocumentId: string;
   retrievedContext?: Array<{ chunkId: string; label: string; text: string }>;
 }): Promise<ContractExtraction & { provenance: GeminiProvenance }> {
+  const sourceLabelsById = Object.fromEntries(input.retrievedContext?.map((chunk) => [chunk.chunkId, chunk.label]) ?? []);
   const passes = buildContractExtractionPasses({
     contractText: input.contractText,
     chunks: input.retrievedContext
@@ -42,7 +43,12 @@ export async function extractContractTerms(input: {
   }
 
   const mergedExtraction = mergeContractExtractions(
-    passResults.map((result) => normalizeContractExtraction(result.data, { sourceDocumentId: input.sourceDocumentId }))
+    passResults.map((result) =>
+      normalizeContractExtraction(result.data, {
+        sourceDocumentId: input.sourceDocumentId,
+        sourceLabelsById
+      })
+    )
   );
   const provenance = passResults[passResults.length - 1]?.provenance ?? emptyProvenance();
   return {
@@ -59,6 +65,7 @@ function extractionSystemInstruction(): string {
     'Do not guess missing terms; mark uncertain terms as needs_review.',
     'Every term must include citation, citation.excerpt, source_excerpt, confidence, needs_review, and reasoning_summary.',
     'Citations must point to the provided source document or chunk IDs.',
+    'When a chunk label includes a page or image label, copy that exact label into citation.label.',
     'normalized_value must use deterministic typed shapes, for example money uses amountMinor and currency, dates use ISO YYYY-MM-DD, percentages use percent, payment terms use dueDays, and unresolved values use kind="unresolved" with rawText and reason.',
     'If a value or citation is incomplete, set needs_review true.'
   ].join(' ');

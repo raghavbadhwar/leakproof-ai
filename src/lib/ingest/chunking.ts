@@ -13,31 +13,34 @@ export type DocumentChunk = {
   tokenEstimate: number;
 };
 
+export type PageMappedText = {
+  page: number;
+  text: string;
+  confidence?: number;
+};
+
 export function chunkTextDocument(input: {
   organizationId: string;
   workspaceId: string;
   sourceDocumentId: string;
   text: string;
   modality?: DocumentChunk['modality'];
+  pageMap?: PageMappedText[];
+  extractionConfidence?: number;
   maxChunkCharacters?: number;
 }): DocumentChunk[] {
-  const paragraphs = input.text
-    .split(/\n{2,}|\r?\n(?=(?:Section|Clause|Article)\s+\d)/i)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
   const maxChunkCharacters = input.maxChunkCharacters ?? 1400;
-  const chunks: string[] = [];
+  const pageMap = input.pageMap?.filter((page) => Number.isInteger(page.page) && page.page > 0 && page.text.trim().length > 0) ?? [];
 
-  for (const paragraph of paragraphs) {
-    if (paragraph.length <= maxChunkCharacters) {
-      chunks.push(paragraph);
-      continue;
-    }
-
-    for (let index = 0; index < paragraph.length; index += maxChunkCharacters) {
-      chunks.push(paragraph.slice(index, index + maxChunkCharacters).trim());
-    }
+  if (input.modality === 'image') {
+    return chunkImageTextDocument(input, maxChunkCharacters);
   }
+
+  if (pageMap.length > 0) {
+    return chunkPageMappedTextDocument(input, pageMap, maxChunkCharacters);
+  }
+
+  const chunks = splitTextIntoChunks(input.text, maxChunkCharacters);
 
   return chunks.map((content, index) =>
     buildChunk({
@@ -49,6 +52,93 @@ export function chunkTextDocument(input: {
       sourceLocator: { paragraph: index + 1 }
     })
   );
+}
+
+function chunkPageMappedTextDocument(
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    sourceDocumentId: string;
+    modality?: DocumentChunk['modality'];
+    extractionConfidence?: number;
+  },
+  pageMap: PageMappedText[],
+  maxChunkCharacters: number
+): DocumentChunk[] {
+  const chunks: DocumentChunk[] = [];
+
+  for (const page of pageMap) {
+    const pageChunks = splitTextIntoChunks(page.text, maxChunkCharacters);
+    pageChunks.forEach((content, pageChunkIndex) => {
+      const sourceLocator = compactLocator({
+        page: page.page,
+        chunk: pageChunkIndex + 1,
+        confidence: page.confidence ?? input.extractionConfidence
+      });
+
+      chunks.push(
+        buildChunk({
+          ...input,
+          chunkIndex: chunks.length,
+          modality: input.modality ?? 'pdf',
+          content,
+          sourceLabel: `Page ${page.page}, chunk ${pageChunkIndex + 1}`,
+          sourceLocator
+        })
+      );
+    });
+  }
+
+  return chunks;
+}
+
+function chunkImageTextDocument(
+  input: {
+    organizationId: string;
+    workspaceId: string;
+    sourceDocumentId: string;
+    text: string;
+    extractionConfidence?: number;
+  },
+  maxChunkCharacters: number
+): DocumentChunk[] {
+  return splitTextIntoChunks(input.text, maxChunkCharacters).map((content, index) =>
+    buildChunk({
+      ...input,
+      chunkIndex: index,
+      modality: 'image',
+      content,
+      sourceLabel: index === 0 ? 'Image 1' : `Image 1, chunk ${index + 1}`,
+      sourceLocator: compactLocator({
+        image: 1,
+        chunk: index + 1,
+        extraction: 'Image extraction',
+        confidence: input.extractionConfidence
+      })
+    })
+  );
+}
+
+function splitTextIntoChunks(text: string, maxChunkCharacters: number): string[] {
+  const paragraphs = text
+    .split(/\n{2,}|\r?\n(?=(?:Section|Clause|Article)\s+\d)/i)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    if (paragraph.length <= maxChunkCharacters) {
+      chunks.push(paragraph);
+      continue;
+    }
+
+    for (let index = 0; index < paragraph.length; index += maxChunkCharacters) {
+      const chunk = paragraph.slice(index, index + maxChunkCharacters).trim();
+      if (chunk) chunks.push(chunk);
+    }
+  }
+
+  return chunks;
 }
 
 export function chunkCsvRows(input: {
@@ -97,6 +187,10 @@ function buildChunk(input: {
     contentHash: hashContent(input.content),
     tokenEstimate: estimateTokens(input.content)
   };
+}
+
+function compactLocator(locator: Record<string, string | number | undefined>): Record<string, string | number> {
+  return Object.fromEntries(Object.entries(locator).filter(([, value]) => value !== undefined)) as Record<string, string | number>;
 }
 
 export function hashContent(content: string): string {

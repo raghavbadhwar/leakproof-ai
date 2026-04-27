@@ -199,6 +199,65 @@ describe('contract extraction normalizer', () => {
     expect(parsed.terms[2]?.needs_review).toBe(true);
   });
 
+  it('preserves page labels when Gemini cites a page-aware chunk id', () => {
+    const parsed = normalizeContractExtraction(
+      {
+        terms: [
+          {
+            term_type: 'payment_terms',
+            value: 'Net 30',
+            normalized_value: { dueDays: 30 },
+            citation: {
+              sourceType: 'contract',
+              sourceId: 'chunk_page_4_2',
+              label: 'Section 8.2',
+              excerpt: 'Invoices are payable Net 30 from invoice date.'
+            },
+            source_excerpt: 'Invoices are payable Net 30 from invoice date.',
+            confidence: 0.92,
+            needs_review: false,
+            reasoning_summary: 'The payment terms clause explicitly says Net 30.'
+          }
+        ]
+      },
+      {
+        sourceDocumentId: 'doc_contract',
+        sourceLabelsById: {
+          chunk_page_4_2: 'Page 4, chunk 2'
+        }
+      }
+    );
+
+    expect(parsed.terms[0]?.citation).toMatchObject({
+      sourceId: 'chunk_page_4_2',
+      label: 'Page 4, chunk 2 - Section 8.2'
+    });
+  });
+
+  it('uses image labels when raw citations only provide the image chunk id', () => {
+    const parsed = normalizeContractExtraction(
+      {
+        terms: [
+          {
+            term_name: 'Discount',
+            value: '20%',
+            citation: 'chunk_image_1',
+            source_excerpt: 'Customer receives a 20% promotional discount.',
+            confidence: 'high'
+          }
+        ]
+      },
+      {
+        sourceDocumentId: 'doc_contract',
+        sourceLabelsById: {
+          chunk_image_1: 'Image 1'
+        }
+      }
+    );
+
+    expect(parsed.terms[0]?.citation.label).toBe('Image 1');
+  });
+
   it('splits a promotional discount that contains an expiry date', () => {
     const parsed = normalizeContractExtraction(
       {

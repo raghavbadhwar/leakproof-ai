@@ -6,11 +6,20 @@ describe('audit event helpers', () => {
     const redacted = redactAuditMetadata({
       source_document_id: 'doc_1',
       raw_contract_text: 'sensitive contract',
+      contractText: 'contract pasted into camel-case metadata',
+      invoice_contents: 'invoice CSV contents',
       invoice_rows: [{ amount: '8000.00' }],
+      embeddings: [0.12, 0.34],
+      model_response: { answer: 'raw model answer' },
+      llm_output: 'raw model output',
       prompt: 'full prompt',
       api_key: 'secret',
+      access_token: 'token',
       nested: {
         model_output: 'raw model output',
+        excerpt: 'raw evidence excerpt',
+        citation: { excerpt: 'raw citation excerpt' },
+        free_text_note: 'reviewer pasted contract text',
         safe_count: 2
       },
       note: 'contains pasted contract text',
@@ -20,11 +29,20 @@ describe('audit event helpers', () => {
     expect(redacted).toEqual({
       source_document_id: 'doc_1',
       raw_contract_text: '[redacted]',
+      contractText: '[redacted]',
+      invoice_contents: '[redacted]',
       invoice_rows: '[redacted]',
+      embeddings: '[redacted]',
+      model_response: '[redacted]',
+      llm_output: '[redacted]',
       prompt: '[redacted]',
       api_key: '[redacted]',
+      access_token: '[redacted]',
       nested: {
         model_output: '[redacted]',
+        excerpt: '[redacted]',
+        citation: '[redacted]',
+        free_text_note: '[redacted]',
         safe_count: 2
       },
       note: '[redacted]',
@@ -47,6 +65,7 @@ describe('audit event helpers', () => {
     expect(shouldWriteAuditEvent('evidence_candidate.approved')).toBe(true);
     expect(shouldWriteAuditEvent('report.exported')).toBe(true);
     expect(shouldWriteAuditEvent('customer.assignment_changed')).toBe(true);
+    expect(shouldWriteAuditEvent('role.changed')).toBe(true);
     expect(shouldWriteAuditEvent('extraction_run_started')).toBe(true);
     expect(shouldWriteAuditEvent('extraction_run_completed')).toBe(true);
     expect(shouldWriteAuditEvent('extraction_run_failed')).toBe(true);
@@ -56,6 +75,7 @@ describe('audit event helpers', () => {
     expect(shouldWriteAuditEvent('run_superseded')).toBe(true);
     expect(shouldWriteAuditEvent('invite_created')).toBe(true);
     expect(shouldWriteAuditEvent('invite_cancelled')).toBe(true);
+    expect(shouldWriteAuditEvent('invite_accepted')).toBe(true);
     expect(shouldWriteAuditEvent('member_added')).toBe(true);
     expect(shouldWriteAuditEvent('member_removed')).toBe(true);
     expect(shouldWriteAuditEvent('member_role_changed')).toBe(true);

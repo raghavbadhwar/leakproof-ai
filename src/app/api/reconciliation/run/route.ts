@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   try {
     const body = runReconciliationSchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, body.workspace_id, REVIEWER_WRITE_ROLES);
-    enforceRateLimit({
+    await enforceRateLimit({
       key: `reconciliation:${auth.userId}:${body.organization_id}:${body.workspace_id}`,
       limit: 5,
       windowMs: 10 * 60 * 1000
@@ -152,7 +152,9 @@ export async function POST(request: Request) {
           evidence_type: citation.sourceType === 'contract' ? 'contract_term' : citation.sourceType === 'invoice' ? 'invoice_row' : citation.sourceType === 'usage' ? 'usage_row' : 'calculation',
           source_id: isUuid(citation.sourceId) ? citation.sourceId : null,
           citation,
-          excerpt: citation.excerpt
+          excerpt: citation.excerpt,
+          approval_state: 'suggested',
+          relevance_explanation: 'System-created from deterministic reconciliation citations. Reviewer approval is required before export.'
         }));
       });
 
