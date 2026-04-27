@@ -52,6 +52,10 @@ export type InvoiceRecord = {
   servicePeriodStart?: string;
   servicePeriodEnd?: string;
   paymentTermsDays?: number;
+  dueDate?: string;
+  paidAt?: string;
+  productLabel?: string;
+  teamLabel?: string;
   citation: Citation;
 };
 
@@ -62,6 +66,8 @@ export type UsageRecord = {
   periodEnd: string;
   metricName: string;
   quantity: number;
+  productLabel?: string;
+  teamLabel?: string;
   citation: Citation;
 };
 

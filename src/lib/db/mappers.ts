@@ -23,6 +23,10 @@ type InvoiceRecordRow = {
   service_period_start?: string | null;
   service_period_end?: string | null;
   payment_terms_days?: number | null;
+  due_date?: string | null;
+  paid_at?: string | null;
+  product_label?: string | null;
+  team_label?: string | null;
   row_citation: InvoiceRecord['citation'];
 };
 
@@ -33,6 +37,8 @@ type UsageRecordRow = {
   period_end: string;
   metric_name: string;
   quantity: number;
+  product_label?: string | null;
+  team_label?: string | null;
   row_citation: UsageRecord['citation'];
 };
 
@@ -62,6 +68,10 @@ export function mapInvoiceRecord(row: InvoiceRecordRow): InvoiceRecord {
     servicePeriodStart: row.service_period_start ?? undefined,
     servicePeriodEnd: row.service_period_end ?? undefined,
     paymentTermsDays: row.payment_terms_days ?? undefined,
+    dueDate: row.due_date ?? undefined,
+    paidAt: row.paid_at ?? undefined,
+    productLabel: row.product_label ?? undefined,
+    teamLabel: row.team_label ?? undefined,
     citation: row.row_citation
   };
 }
@@ -74,6 +84,8 @@ export function mapUsageRecord(row: UsageRecordRow): UsageRecord {
     periodEnd: row.period_end,
     metricName: row.metric_name,
     quantity: Number(row.quantity),
+    productLabel: row.product_label ?? undefined,
+    teamLabel: row.team_label ?? undefined,
     citation: row.row_citation
   };
 }

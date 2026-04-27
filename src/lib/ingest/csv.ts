@@ -24,6 +24,9 @@ export type IngestedInvoiceRecord = {
   unitPriceMinor?: number;
   amountMinor: number;
   currency: string;
+  paymentTermsDays?: number;
+  dueDate?: string;
+  paidAt?: string;
   productLabel?: string;
   teamLabel?: string;
   servicePeriodStart?: string;
@@ -96,6 +99,9 @@ export function parseInvoiceCsv(csv: string, context: CsvParseContext): Ingested
     unitPriceMinor: optionalMoney(row.unit_price, 'unit_price', index + 2),
     amountMinor: parseMoneyToMinorUnits(required(row, 'amount', index + 2), `amount on row ${index + 2}`),
     currency: required(row, 'currency', index + 2).toUpperCase(),
+    paymentTermsDays: optionalInteger(row.payment_terms_days, 'payment_terms_days', index + 2),
+    dueDate: optionalDate(row.due_date, 'due_date', index + 2),
+    paidAt: optionalDate(row.paid_at, 'paid_at', index + 2),
     productLabel: optionalText(row.product_label),
     teamLabel: optionalText(row.team_label),
     servicePeriodStart: optionalDate(row.service_period_start, 'service_period_start', index + 2),
@@ -265,6 +271,15 @@ function optionalNumber(value: string | undefined, field: string, rowNumber: num
 function optionalMoney(value: string | undefined, field: string, rowNumber: number): number | undefined {
   if (!value?.trim()) return undefined;
   return parseMoneyToMinorUnits(value, `${field} on row ${rowNumber}`);
+}
+
+function optionalInteger(value: string | undefined, field: string, rowNumber: number): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${field} on row ${rowNumber}: ${value}`);
+  }
+  return parsed;
 }
 
 function parseNumber(value: string, label: string): number {

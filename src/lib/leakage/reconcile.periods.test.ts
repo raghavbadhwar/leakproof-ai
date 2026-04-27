@@ -314,4 +314,138 @@ describe('period-aware finance reconciliation', () => {
     expect(finding?.estimatedAmount.amountMinor).toBe(0);
     expect(finding?.status).toBe('needs_review');
   });
+
+  it('splits invoice evidence by currency instead of comparing mixed currencies', () => {
+    const terms = [term('minimum_commitment', { amountMinor: 1_000_000, currency: 'USD', frequency: 'monthly' })];
+    const invoices = [
+      invoice({ id: 'inv_usd', customerId: 'customer_alpha', invoiceDate: '2026-03-31', amountMinor: 800_000, currency: 'USD' }),
+      invoice({ id: 'inv_eur', customerId: 'customer_alpha', invoiceDate: '2026-03-31', amountMinor: 900_000, currency: 'EUR' })
+    ];
+
+    const finding = findMinimumCommitmentShortfall({ customerId: 'customer_alpha', terms, invoices });
+
+    expect(finding?.estimatedAmount).toEqual({ amountMinor: 200_000, currency: 'USD' });
+    expect(finding?.citations.some((citation) => citation.sourceId === 'inv_eur')).toBe(false);
+  });
+
+  it('ignores negative credit notes when checking minimum commitment underbilling', () => {
+    const terms = [term('minimum_commitment', { amountMinor: 1_000_000, currency: 'USD', frequency: 'monthly' })];
+    const invoices = [
+      invoice({ id: 'inv_platform', customerId: 'customer_alpha', invoiceDate: '2026-03-31', amountMinor: 1_000_000 }),
+      invoice({
+        id: 'inv_credit',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-03-31',
+        lineItem: 'Credit note for service issue',
+        amountMinor: -200_000
+      })
+    ];
+
+    expect(findMinimumCommitmentShortfall({ customerId: 'customer_alpha', terms, invoices })).toBeNull();
+  });
+
+  it('does not apply monthly annual uplift logic to one-time fee rows', () => {
+    const terms = [
+      term('contract_start_date', { date: '2025-01-01' }),
+      term('base_fee', { amountMinor: 100_000, currency: 'USD', frequency: 'monthly' }),
+      term('annual_uplift', { percent: 5 })
+    ];
+    const invoices = [
+      invoice({
+        id: 'inv_setup',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-01-31',
+        servicePeriodStart: '2026-01-01',
+        lineItem: 'One-time implementation fee',
+        amountMinor: 100_000
+      })
+    ];
+
+    expect(findMissedAnnualUplift({ customerId: 'customer_alpha', terms, invoices })).toBeNull();
+  });
+
+  it('does not double count annual uplift when an invoice already includes an uplift line', () => {
+    const terms = [
+      term('contract_start_date', { date: '2025-01-01' }),
+      term('base_fee', { amountMinor: 100_000, currency: 'USD', frequency: 'monthly' }),
+      term('annual_uplift', { percent: 5 })
+    ];
+    const invoices = [
+      invoice({
+        id: 'inv_base',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-01-31',
+        servicePeriodStart: '2026-01-01',
+        lineItem: 'Monthly platform fee',
+        amountMinor: 100_000
+      }),
+      invoice({
+        id: 'inv_uplift',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-01-31',
+        servicePeriodStart: '2026-01-01',
+        lineItem: 'Annual uplift adjustment',
+        amountMinor: 5_000
+      })
+    ];
+
+    expect(findMissedAnnualUplift({ customerId: 'customer_alpha', terms, invoices })).toBeNull();
+  });
+
+  it('uses explicit payment terms days before line item text', () => {
+    const terms = [term('payment_terms', { days: 30 })];
+    const invoices = [
+      invoice({
+        id: 'inv_explicit_terms',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-03-31',
+        lineItem: 'Monthly platform fee Net 30',
+        paymentTermsDays: 45,
+        amountMinor: 1_000_000
+      })
+    ];
+
+    const finding = findPaymentTermsMismatch({ customerId: 'customer_alpha', terms, invoices });
+
+    expect(finding?.outcomeType).toBe('risk_alert');
+    expect(finding?.estimatedAmount.amountMinor).toBe(0);
+    expect(finding?.calculation).toMatchObject({
+      mismatches: [{ invoiceTermsDays: 45, evidenceSource: 'payment_terms_days' }]
+    });
+  });
+
+  it('only flags the missing amount when usage overage was partially billed', () => {
+    const terms = [
+      term('usage_allowance', { metricName: 'api_calls', quantity: 100, frequency: 'monthly' }),
+      term('overage_price', { metricName: 'api_calls', amountMinor: 100, currency: 'USD', frequency: 'monthly' })
+    ];
+    const records = [
+      usage({
+        id: 'usage_may',
+        customerId: 'customer_alpha',
+        periodStart: '2026-05-01',
+        periodEnd: '2026-05-31',
+        metricName: 'api_calls',
+        quantity: 150
+      })
+    ];
+    const invoices = [
+      invoice({
+        id: 'inv_may_overage',
+        customerId: 'customer_alpha',
+        invoiceDate: '2026-05-31',
+        servicePeriodStart: '2026-05-01',
+        lineItem: 'Usage overage',
+        amountMinor: 3_000
+      })
+    ];
+
+    const finding = findUsageOverageUnbilled({ customerId: 'customer_alpha', terms, usage: records, invoices });
+
+    expect(finding?.estimatedAmount.amountMinor).toBe(2_000);
+    expect(finding?.calculation).toMatchObject({
+      unbilledMinor: 2_000,
+      periodShortfalls: [{ expectedOverageMinor: 5_000, billedOverageMinor: 3_000, unbilledMinor: 2_000 }]
+    });
+  });
 });

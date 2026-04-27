@@ -5,8 +5,8 @@ describe('CSV ingestion', () => {
   it('parses invoice rows into integer minor-unit amounts with row citations', () => {
     const records = parseInvoiceCsv(
       [
-        'customer_external_id,customer_name,segment,billing_model,contract_type,contract_value,renewal_date,owner_label,domain,invoice_id,invoice_date,line_item,quantity,unit_price,amount,currency,product_label,team_label,service_period_start,service_period_end',
-        'alpha,Alpha Retail Cloud Ltd.,Enterprise,Usage + minimum,Order form,120000.00,2026-12-31,Nina,alpha.example,INV-1001,2026-03-31,Monthly platform fee,1,8000.00,8000.00,USD,Core API,Finance Ops,2026-03-01,2026-03-31'
+        'customer_external_id,customer_name,segment,billing_model,contract_type,contract_value,renewal_date,owner_label,domain,invoice_id,invoice_date,line_item,quantity,unit_price,amount,currency,payment_terms_days,due_date,paid_at,product_label,team_label,service_period_start,service_period_end',
+        'alpha,Alpha Retail Cloud Ltd.,Enterprise,Usage + minimum,Order form,120000.00,2026-12-31,Nina,alpha.example,INV-1001,2026-03-31,Monthly platform fee,1,8000.00,8000.00,USD,45,2026-05-15,2026-05-10,Core API,Finance Ops,2026-03-01,2026-03-31'
       ].join('\n'),
       { sourceDocumentId: 'doc_invoice', workspaceId: 'workspace_1' }
     );
@@ -22,6 +22,9 @@ describe('CSV ingestion', () => {
       billingModel: 'Usage + minimum',
       contractValueMinor: 12_000_000,
       renewalDate: '2026-12-31',
+      paymentTermsDays: 45,
+      dueDate: '2026-05-15',
+      paidAt: '2026-05-10',
       productLabel: 'Core API',
       teamLabel: 'Finance Ops',
       servicePeriodStart: '2026-03-01',
@@ -83,5 +86,17 @@ describe('CSV ingestion', () => {
         { sourceDocumentId: 'doc_invoice', workspaceId: 'workspace_1' }
       )
     ).toThrow(/amount/i);
+  });
+
+  it('rejects non-integer payment terms days', () => {
+    expect(() =>
+      parseInvoiceCsv(
+        [
+          'customer_external_id,customer_name,invoice_id,invoice_date,line_item,quantity,unit_price,amount,currency,payment_terms_days',
+          'alpha,Alpha Retail Cloud Ltd.,INV-1001,2026-03-31,Monthly platform fee,1,8000.00,8000.00,USD,30.5'
+        ].join('\n'),
+        { sourceDocumentId: 'doc_invoice', workspaceId: 'workspace_1' }
+      )
+    ).toThrow(/payment_terms_days/i);
   });
 });
