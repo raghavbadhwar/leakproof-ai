@@ -27,6 +27,18 @@ export function handleApiError(error: unknown): NextResponse {
       return jsonError('That finding status change is not allowed.', 409);
     }
 
+    if (error.message === 'action_not_pending') {
+      return jsonError('That Copilot action is no longer pending.', 409);
+    }
+
+    if (error.message === 'action_expired') {
+      return jsonError('That Copilot action has expired.', 409);
+    }
+
+    if (error.message === 'action_blocked') {
+      return jsonError('Resolve the action blockers before confirming this Copilot action.', 409);
+    }
+
     if (error.message === 'rate_limited') {
       return jsonError('Too many requests. Wait a moment and try again.', 429);
     }

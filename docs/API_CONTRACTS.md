@@ -122,6 +122,31 @@ Returns findings.
 
 Returns finding detail and evidence.
 
+### `POST /api/findings/:id/ai-critique`
+
+Generates an advisory Gemini evidence review for one finding.
+The critique is stored separately from finding amount and human review status.
+Only owner, admin, and reviewer roles can generate a new critique.
+
+Request:
+
+```json
+{
+  "organization_id": "organization_id"
+}
+```
+
+Response:
+
+```json
+{
+  "critique": {
+    "recommendation_status": "strong_evidence|weak_evidence|conflicting_evidence|needs_more_evidence",
+    "evidence_score": 0
+  }
+}
+```
+
 ### `PATCH /api/findings/:id/status`
 
 Approve, dismiss, or mark needs review.

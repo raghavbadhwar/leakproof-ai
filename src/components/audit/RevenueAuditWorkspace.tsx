@@ -59,6 +59,7 @@ import type { Session } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/db/supabaseBrowser';
 import type { AnalyticsPoint, WorkspaceAnalyticsPayload } from '@/lib/analytics/workspaceAnalytics';
 import { isCustomerFacingFindingStatus } from '@/lib/analytics/statuses';
+import { CopilotPanel } from '@/components/copilot/CopilotPanel';
 import { AppShell } from '@/components/layout/AppShell';
 import { ExecutiveReportPreview, type ExecutiveReportViewData } from '@/components/report/ExecutiveReportPreview';
 import { ChartCardShell as ChartCard } from '@/components/ui/chart-card-shell';
@@ -187,9 +188,46 @@ type EvidenceCandidateRow = {
   } | null;
 };
 
+type FindingAiRecommendation = 'strong_evidence' | 'weak_evidence' | 'conflicting_evidence' | 'needs_more_evidence';
+
+type FindingCritiqueJson = {
+  evidenceQuality?: {
+    score?: number;
+    summary?: string;
+    strengths?: string[];
+    gaps?: string[];
+  };
+  falsePositiveRisks?: Array<{
+    risk?: string;
+    severity?: 'low' | 'medium' | 'high' | string;
+    evidenceReference?: string;
+    reviewerAction?: string;
+  }>;
+  reviewerChecklist?: string[];
+  recommendation?: FindingAiRecommendation | string;
+  recommendationRationale?: string;
+  safety?: {
+    canApproveFinding?: boolean;
+    canChangeFindingAmount?: boolean;
+    canChangeFindingStatus?: boolean;
+  };
+};
+
+type FindingAiCritiqueRow = {
+  id: string;
+  recommendation_status: FindingAiRecommendation | string;
+  evidence_score: number;
+  critique_json: FindingCritiqueJson;
+  model?: string | null;
+  prompt_version?: string | null;
+  generated_by?: string | null;
+  created_at: string;
+};
+
 type FindingDetail = {
   finding: FindingRow;
   evidence: EvidenceItemRow[];
+  latest_critique?: FindingAiCritiqueRow | null;
 };
 
 type InvoiceRow = {
@@ -897,6 +935,16 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     if (selectedFindingId) await refreshFindingDetail(activeSession, selectedOrgId, selectedFindingId);
   }
 
+  async function runFindingAiReview(findingId: string) {
+    const activeSession = requireActiveSession();
+    await apiFetch(activeSession, `/api/findings/${findingId}/ai-critique`, {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: selectedOrgId })
+    });
+    setMessage('AI evidence review saved. A human reviewer still controls approval.');
+    await refreshFindingDetail(activeSession, selectedOrgId, findingId);
+  }
+
   async function updateFindingStatus(findingId: string, status: FindingStatusAction) {
     const activeSession = requireActiveSession();
     await apiFetch(activeSession, `/api/findings/${findingId}/status?organization_id=${selectedOrgId}`, {
@@ -1038,7 +1086,11 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     for (const term of highConfidenceTerms) {
       await apiFetch(activeSession, `/api/contract-terms/${term.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ organization_id: selectedOrgId, review_status: 'approved' })
+        body: JSON.stringify({
+          organization_id: selectedOrgId,
+          review_status: 'needs_review',
+          reviewer_note: 'Autonomous audit queued this high-confidence term for human review.'
+        })
       });
     }
     for (const term of uncertainTerms) {
@@ -1047,7 +1099,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
         body: JSON.stringify({ organization_id: selectedOrgId, review_status: 'needs_review' })
       });
     }
-    logStep(`Approved ${highConfidenceTerms.length} high-confidence terms and flagged ${uncertainTerms.length} terms for review.`);
+    logStep(`Queued ${highConfidenceTerms.length} high-confidence terms and flagged ${uncertainTerms.length} uncertain terms for human review.`);
 
     logStep('Running deterministic reconciliation.');
     await apiFetch(activeSession, '/api/reconciliation/run', {
@@ -1056,29 +1108,20 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     });
 
     snapshot = await fetchWorkspaceSnapshot(activeSession, selectedOrgId, selectedWorkspaceId);
-    const reviewableFindings = snapshot.findings.filter((finding) => ['draft', 'needs_review'].includes(finding.status));
-    const highConfidenceFindings = reviewableFindings.filter((finding) => finding.confidence >= 0.85);
-    const uncertainFindings = reviewableFindings.filter((finding) => finding.confidence < 0.85);
+    const reviewableFindings = snapshot.findings.filter((finding) => finding.status === 'draft');
 
-    for (const finding of highConfidenceFindings) {
-      await apiFetch(activeSession, `/api/findings/${finding.id}/status?organization_id=${selectedOrgId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: 'approved',
-          note: 'Autonomous audit approved this high-confidence finding. Human review is still required before customer use.'
-        })
-      });
-    }
-    for (const finding of uncertainFindings) {
+    for (const finding of reviewableFindings) {
       await apiFetch(activeSession, `/api/findings/${finding.id}/status?organization_id=${selectedOrgId}`, {
         method: 'PATCH',
         body: JSON.stringify({
           status: 'needs_review',
-          note: 'Autonomous audit flagged this finding because confidence is below the approval threshold.'
+          note: finding.confidence >= 0.85
+            ? 'Autonomous audit queued this high-confidence finding for human review.'
+            : 'Autonomous audit flagged this finding because confidence is below the review threshold.'
         })
       });
     }
-    logStep(`Approved ${highConfidenceFindings.length} high-confidence findings and flagged ${uncertainFindings.length} findings for review.`);
+    logStep(`Queued ${reviewableFindings.length} findings for human review. No findings were automatically approved.`);
 
     snapshot = await fetchWorkspaceSnapshot(activeSession, selectedOrgId, selectedWorkspaceId);
     const findingsNeedingEvidence = snapshot.findings
@@ -1204,6 +1247,16 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
             </select>
         </>
+      )}
+      copilotPanel={(
+        <CopilotPanel
+          accessToken={session.access_token}
+          organizationId={selectedOrgId}
+          workspaceId={selectedWorkspaceId}
+          workspaceName={selectedWorkspace?.name ?? 'Revenue Leakage Audit'}
+          userRole={selectedOrg ? selectedOrg.role : 'viewer'}
+          selectedFindingId={selectedFindingId || undefined}
+        />
       )}
     >
 
@@ -1980,9 +2033,11 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               finding={selectedFindingDetail?.finding ?? selectedFinding}
               evidence={selectedFindingDetail?.evidence ?? []}
               candidates={evidenceCandidates.filter((candidate) => candidate.finding_id === selectedFinding.id)}
+              latestCritique={selectedFindingDetail?.latest_critique ?? null}
               onApproveCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'approve'))}
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
+              onRunAiReview={() => runTask(() => runFindingAiReview(selectedFinding.id))}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
               canMutateFindings={selectedOrgCanReviewFindings}
             />
@@ -1998,9 +2053,11 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               finding={selectedFindingDetail?.finding ?? selectedFinding}
               evidence={selectedFindingDetail?.evidence ?? []}
               candidates={evidenceCandidates.filter((candidate) => candidate.finding_id === selectedFinding.id)}
+              latestCritique={selectedFindingDetail?.latest_critique ?? null}
               onApproveCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'approve'))}
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
+              onRunAiReview={() => runTask(() => runFindingAiReview(selectedFinding.id))}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
               canMutateFindings={selectedOrgCanReviewFindings}
             />
@@ -2520,18 +2577,22 @@ function FindingDetailPanel({
   finding,
   evidence,
   candidates,
+  latestCritique,
   onApproveCandidate,
   onRejectCandidate,
   onRemoveEvidence,
+  onRunAiReview,
   onUpdateStatus,
   canMutateFindings
 }: {
   finding: FindingRow;
   evidence: EvidenceItemRow[];
   candidates: EvidenceCandidateRow[];
+  latestCritique: FindingAiCritiqueRow | null;
   onApproveCandidate: (candidateId: string) => void;
   onRejectCandidate: (candidateId: string) => void;
   onRemoveEvidence: (evidenceItemId: string) => void;
+  onRunAiReview: () => void;
   onUpdateStatus: (status: FindingStatusAction) => void;
   canMutateFindings: boolean;
 }) {
@@ -2567,6 +2628,13 @@ function FindingDetailPanel({
     '',
     'Can you confirm whether this adjustment matches your records?'
   ].join('\n');
+  const critique = latestCritique?.critique_json;
+  const critiqueRisks = critique?.falsePositiveRisks?.filter((risk) => risk.risk) ?? [];
+  const critiqueChecklist = critique?.reviewerChecklist?.filter(Boolean) ?? [];
+  const critiqueGaps = critique?.evidenceQuality?.gaps?.filter(Boolean) ?? [];
+  const critiqueStrengths = critique?.evidenceQuality?.strengths?.filter(Boolean) ?? [];
+  const critiqueScore = latestCritique?.evidence_score ?? critique?.evidenceQuality?.score;
+  const critiqueRecommendation = latestCritique?.recommendation_status ?? critique?.recommendation;
 
   return (
     <div className="detail-panel">
@@ -2627,6 +2695,79 @@ function FindingDetailPanel({
           </div>
         )}
       />
+
+      <section className="detail-card ai-review-card">
+        <div className="ai-review-header">
+          <div>
+            <h4>AI evidence review</h4>
+            <p>Advisory critique only. It cannot approve findings, change status, or change the amount.</p>
+          </div>
+          <button className="secondary-button" disabled={!canMutateFindings} onClick={onRunAiReview}>
+            <Bot size={16} /> Run AI review
+          </button>
+        </div>
+        {latestCritique ? (
+          <>
+            <div className="ai-review-grid">
+              <div>
+                <span>Evidence quality</span>
+                <strong>{typeof critiqueScore === 'number' ? `${critiqueScore}/100` : 'Not scored'}</strong>
+                <p>{critique?.evidenceQuality?.summary ?? 'No summary returned.'}</p>
+              </div>
+              <div>
+                <span>AI recommendation</span>
+                <strong>{labelize(critiqueRecommendation ?? 'needs_more_evidence')}</strong>
+                <p>{critique?.recommendationRationale ?? 'Review the evidence and calculation before changing any status.'}</p>
+              </div>
+              <div>
+                <span>Safety boundary</span>
+                <strong>Human approval required</strong>
+                <p>Amount and status stay controlled by deterministic code and reviewer actions.</p>
+              </div>
+            </div>
+            <div className="detail-card-grid three-up ai-review-lists">
+              <div>
+                <h4>False-positive risks</h4>
+                {critiqueRisks.length === 0 ? (
+                  <p className="muted">No false-positive risks were returned.</p>
+                ) : (
+                  <ul className="compact-list">
+                    {critiqueRisks.map((risk, index) => (
+                      <li key={`${risk.risk}-${index}`}>
+                        <strong>{labelize(risk.severity ?? 'risk')}</strong> {risk.risk}
+                        {risk.reviewerAction ? <span>{risk.reviewerAction}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h4>Reviewer checklist</h4>
+                {critiqueChecklist.length === 0 ? (
+                  <p className="muted">Run the AI review to generate checklist items.</p>
+                ) : (
+                  <ul className="compact-list">
+                    {critiqueChecklist.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h4>Evidence notes</h4>
+                {[...critiqueStrengths, ...critiqueGaps].length === 0 ? (
+                  <p className="muted">No evidence notes were returned.</p>
+                ) : (
+                  <ul className="compact-list">
+                    {[...critiqueStrengths, ...critiqueGaps].slice(0, 8).map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                )}
+              </div>
+            </div>
+            <p className="muted">Last AI review: {formatDate(latestCritique.created_at)} using {latestCritique.model ?? 'Gemini'}.</p>
+          </>
+        ) : (
+          <p className="muted">No AI evidence review has been saved yet. Run it after approving the evidence snippets a human wants the model to critique.</p>
+        )}
+      </section>
 
       <div className="split-grid">
         <div className="detail-card">
@@ -2762,6 +2903,12 @@ function compactMoney(amountMinor: number, currency: string): string {
     notation: 'compact',
     maximumFractionDigits: 1
   }).format(amountMinor / 100);
+}
+
+function labelize(value: string): string {
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function previewValue(value: unknown): string {

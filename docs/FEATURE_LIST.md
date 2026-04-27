@@ -122,7 +122,7 @@ Product principle: LLM extracts. Code calculates. Human approves.
 | Evidence coverage status | Implemented | Findings track pending, complete, weak, or conflicting evidence. |
 | Citation-backed evidence pack | Implemented | Findings and reports include structured evidence references. |
 | Conflicting evidence workflow | Planned | Full workflow should surface contradictions, not just weak coverage. |
-| Evidence quality scoring | Planned | Add checks for source type, recency, exactness, and completeness. |
+| Evidence quality scoring | Implemented | Copilot advisory intelligence checks approved contract, invoice, usage, and formula support without approving evidence. |
 
 ## 9. Reports And Exports
 
@@ -137,7 +137,20 @@ Product principle: LLM extracts. Code calculates. Human approves.
 | Export audit event | Implemented | Export actions are recorded. |
 | Branded PDF template | Planned | Needed for polished customer delivery. |
 | Evidence appendix | Planned | Full report should include a defensible appendix per finding. |
-| Board/CFO summary view | Planned | Higher-level portfolio report across multiple audits. |
+| Board/CFO summary view | Partially implemented | Copilot can prepare workspace-level CFO summary data with customer-facing leakage separated from internal exposure; portfolio-level reporting is still planned. |
+
+## 9A. LeakProof Copilot
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Right-side Copilot panel | Implemented | Assistant is mounted over the audit workspace; it does not replace the structured workspace. |
+| Read-only workspace tools | Implemented | Summaries, analytics, findings, finding detail, report readiness, missing data, CFO data, and formula explanations use scoped server-side tools. |
+| Gemini-assisted explanations | Implemented | Gemini explains schema-validated tool output only; code supplies canonical data and deterministic money values. |
+| Action cards and confirmation | Implemented | Mutation-like requests create pending actions with role, risk, blockers, confirm, and cancel states. |
+| Controlled workflow execution | Implemented | Confirmed supported actions execute through existing guarded routes/helpers with role/evidence/report checks and audit events. |
+| Finding intelligence | Implemented | Evidence quality review, false-positive risk, reviewer checklist, CFO summary, and recovery-note drafts are advisory only. |
+| Sensitive-data storage policy | Implemented | Assistant tables store safe summaries, refs, and result summaries only; raw prompts, contracts, invoice rows, embeddings, and model output are excluded. |
+| Forbidden Copilot actions | Implemented | Copilot cannot export reports, send email, create invoices, delete documents, change roles, auto-approve findings, or auto-send recovery notes. |
 
 ## 10. Autopilot And Workflow Agent
 
