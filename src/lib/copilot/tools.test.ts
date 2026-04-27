@@ -141,7 +141,9 @@ describe('read-only Copilot tools', () => {
           customerId: null,
           sourceDocumentId: null,
           amountMinor: 10_000,
-          currency: 'USD'
+          currency: 'USD',
+          servicePeriodStart: null,
+          servicePeriodEnd: null
         }
       ]
     });
@@ -181,6 +183,9 @@ describe('read-only Copilot tools', () => {
   });
 
   it('routes simple messages to deterministic read-only tools', () => {
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'Map this CSV' }).map((tool) => tool.toolName)).toEqual([
+      'dataMappingAssistant'
+    ]);
     expect(routeCopilotTools({ organizationId, workspaceId, message: 'What is the total leakage?' }).map((tool) => tool.toolName)).toEqual([
       'getAnalyticsSummary'
     ]);
@@ -190,6 +195,15 @@ describe('read-only Copilot tools', () => {
     ]);
     expect(routeCopilotTools({ organizationId, workspaceId, message: 'Is the report ready?' }).map((tool) => tool.toolName)).toEqual([
       'checkReportReadiness'
+    ]);
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'Is the audit ready?' }).map((tool) => tool.toolName)).toEqual([
+      'auditReadinessScore'
+    ]);
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'What should I do next?' }).map((tool) => tool.toolName)).toEqual([
+      'nextBestAction'
+    ]);
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'What data is missing?' }).map((tool) => tool.toolName)).toEqual([
+      'missingDataDetector'
     ]);
     expect(
       routeCopilotTools({
@@ -203,10 +217,18 @@ describe('read-only Copilot tools', () => {
       routeCopilotTools({
         organizationId,
         workspaceId,
+        message: 'Check evidence quality',
+        selectedFindingId: findingId
+      }).map((tool) => tool.toolName)
+    ).toEqual(['evidenceQualityScorer']);
+    expect(
+      routeCopilotTools({
+        organizationId,
+        workspaceId,
         message: 'Check false-positive risk',
         selectedFindingId: findingId
       }).map((tool) => tool.toolName)
-    ).toEqual(['falsePositiveRiskCheck']);
+    ).toEqual(['falsePositiveCritic']);
     expect(
       routeCopilotTools({
         organizationId,
@@ -214,20 +236,90 @@ describe('read-only Copilot tools', () => {
         message: 'Draft recovery note',
         selectedFindingId: findingId
       }).map((tool) => tool.toolName)
-    ).toEqual(['prepareRecoveryNote']);
+    ).toEqual(['recoveryNoteGenerator']);
     expect(routeCopilotTools({ organizationId, workspaceId, message: 'Prepare CFO summary.' }).map((tool) => tool.toolName)).toEqual([
-      'prepareCfoSummary'
+      'cfoSummaryGenerator'
+    ]);
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'Resolve contract hierarchy.' }).map((tool) => tool.toolName)).toEqual([
+      'contractHierarchyResolver'
+    ]);
+    expect(routeCopilotTools({
+      organizationId,
+      workspaceId,
+      message: 'Why did this leakage happen?',
+      selectedFindingId: findingId
+    }).map((tool) => tool.toolName)).toEqual([
+      'rootCauseClassifier'
+    ]);
+    expect(routeCopilotTools({ organizationId, workspaceId, message: 'Show prevention recommendations.' }).map((tool) => tool.toolName)).toEqual([
+      'preventionRecommendations'
     ]);
   });
 
   it('runs advisory finding intelligence tools through the registry', () => {
-    const output = runCopilotTool(contextWithFindings([finding({ id: findingId })]), 'evidenceQualityReview', {
+    const output = runCopilotTool(contextWithFindings([finding({ id: findingId })]), 'evidenceQualityScorer', {
       ...scopedInput(),
       finding_id: findingId
     });
 
     expect(output.outputRefs).toEqual({ finding_id: findingId, advisory_only: true });
     expect(JSON.stringify(output.output)).not.toContain('Raw contract text');
+  });
+
+  it('routes to data mapping without fabricating a mapping', () => {
+    const output = runCopilotTool(contextWithFindings([]), 'dataMappingAssistant', scopedInput());
+
+    expect(output.toolName).toBe('dataMappingAssistant');
+    expect(output.outputRefs).toEqual(expect.objectContaining({
+      feature: 'data_mapping',
+      route: `/api/workspaces/${workspaceId}/data-mapping/suggest`
+    }));
+    expect(JSON.stringify(output.output)).toContain('csv_headers');
+    expect(JSON.stringify(output.output)).not.toContain('mapped_field');
+  });
+
+  it('routes to missing data detector and evidence scorer feature tools', () => {
+    const context = contextWithFindings([finding({ id: findingId, status: 'needs_review' })]);
+
+    const missingData = runCopilotTool(context, 'missingDataDetector', scopedInput());
+    const evidenceScore = runCopilotTool(context, 'evidenceQualityScorer', {
+      ...scopedInput(),
+      finding_id: findingId
+    });
+
+    expect(missingData.outputRefs).toEqual(expect.objectContaining({
+      feature: 'missing_data_detection',
+      route: `/api/workspaces/${workspaceId}/readiness?organization_id=${organizationId}`
+    }));
+    expect(evidenceScore.outputRefs).toEqual({ finding_id: findingId, advisory_only: true });
+  });
+
+  it('routes recovery-note draft through a confirmation-gated feature route', () => {
+    const output = runCopilotTool(contextWithFindings([finding({ id: findingId })]), 'recoveryNoteGenerator', {
+      ...scopedInput(),
+      finding_id: findingId
+    });
+
+    expect(output.outputRefs).toEqual({ finding_id: findingId, advisory_only: true });
+    expect(JSON.stringify(output.output)).toContain('/recovery-note');
+    expect(JSON.stringify(output.output)).toContain('pending_action_required');
+    expect(JSON.stringify(output.output)).toContain('auto_send');
+    expect(JSON.stringify(output.output)).toContain('false');
+  });
+
+  it('keeps customer-facing and internal root-cause exposure separate', () => {
+    const output = runCopilotTool(contextWithFindings([
+      finding({ id: findingId, status: 'approved', amountMinor: 100_000, findingType: 'minimum_commitment_shortfall' }),
+      finding({ id: '33333333-3333-4333-8333-333333333334', status: 'needs_review', amountMinor: 900_000, findingType: 'usage_overage' })
+    ]), 'preventionRecommendations', scopedInput());
+
+    const data = output.output as {
+      customer_facing: Array<{ leakageAmountMinor: number }>;
+      internal_pipeline: Array<{ leakageAmountMinor: number }>;
+    };
+
+    expect(data.customer_facing.reduce((sum, item) => sum + item.leakageAmountMinor, 0)).toBe(100_000);
+    expect(data.internal_pipeline.reduce((sum, item) => sum + item.leakageAmountMinor, 0)).toBe(900_000);
   });
 });
 

@@ -128,6 +128,8 @@ export type CopilotInvoiceRecord = {
   sourceDocumentId: string | null;
   amountMinor: number;
   currency: string;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
 };
 
 export type CopilotUsageRecord = {
@@ -244,6 +246,8 @@ type InvoiceRecordRow = {
   source_document_id: string | null;
   amount_minor: number | string | null;
   currency: string | null;
+  service_period_start: string | null;
+  service_period_end: string | null;
 };
 type UsageRecordRow = {
   id: string;
@@ -333,7 +337,7 @@ export async function loadCopilotContext(
     queryArray<InvoiceRecordRow>(
       supabase
         .from('invoice_records')
-        .select('id, organization_id, workspace_id, customer_id, source_document_id, amount_minor, currency')
+        .select('id, organization_id, workspace_id, customer_id, source_document_id, amount_minor, currency, service_period_start, service_period_end')
         .eq('organization_id', input.organizationId)
         .eq('workspace_id', input.workspaceId)
     ),
@@ -532,7 +536,9 @@ function mapInvoiceRecord(row: InvoiceRecordRow): CopilotInvoiceRecord {
     customerId: row.customer_id,
     sourceDocumentId: row.source_document_id,
     amountMinor: Number(row.amount_minor ?? 0),
-    currency: row.currency ?? 'USD'
+    currency: row.currency ?? 'USD',
+    servicePeriodStart: row.service_period_start,
+    servicePeriodEnd: row.service_period_end
   };
 }
 

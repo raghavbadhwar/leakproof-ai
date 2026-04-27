@@ -407,8 +407,24 @@ function safeToolResultSummary(toolName: CopilotToolName, outputRefs: Record<str
   if (toolName === 'checkReportReadiness') {
     return `Report readiness checked: ${String(outputRefs.report_ready)}.`;
   }
-  if (['evidenceQualityReview', 'falsePositiveRiskCheck', 'reviewerChecklist', 'prepareCfoSummary', 'prepareRecoveryNote'].includes(toolName)) {
+  if ([
+    'evidenceQualityReview',
+    'evidenceQualityScorer',
+    'falsePositiveRiskCheck',
+    'falsePositiveCritic',
+    'reviewerChecklist',
+    'prepareCfoSummary',
+    'cfoSummaryGenerator',
+    'prepareRecoveryNote',
+    'recoveryNoteGenerator',
+    'contractHierarchyResolver',
+    'rootCauseClassifier',
+    'preventionRecommendations'
+  ].includes(toolName)) {
     return `Completed advisory intelligence tool ${toolName}.`;
+  }
+  if (['dataMappingAssistant', 'missingDataDetector', 'auditReadinessScore', 'nextBestAction'].includes(toolName)) {
+    return `Completed AI feature routing tool ${toolName}.`;
   }
   return `Completed read-only tool ${toolName}.`;
 }
@@ -421,7 +437,7 @@ function responseWarnings(executions: CopilotToolExecution[]): string[] {
     if (execution.toolName === 'checkReportReadiness' && isRecord(execution.output) && execution.output.report_ready === false) {
       return ['Report is not ready for customer-facing export yet.'];
     }
-    if (execution.toolName === 'evidenceQualityReview' && isRecord(execution.output)) {
+    if ((execution.toolName === 'evidenceQualityReview' || execution.toolName === 'evidenceQualityScorer') && isRecord(execution.output)) {
       const warnings: string[] = [];
       if (Array.isArray(execution.output.needs_more_evidence) && execution.output.needs_more_evidence.length > 0) {
         warnings.push('Evidence quality review found missing required evidence.');
@@ -431,8 +447,14 @@ function responseWarnings(executions: CopilotToolExecution[]): string[] {
       }
       return warnings;
     }
-    if (execution.toolName === 'falsePositiveRiskCheck' && isRecord(execution.output) && execution.output.riskLevel === 'high') {
+    if ((execution.toolName === 'falsePositiveRiskCheck' || execution.toolName === 'falsePositiveCritic') && isRecord(execution.output) && execution.output.riskLevel === 'high') {
       return ['False-positive risk is high; resolve reviewer checklist items before approval.'];
+    }
+    if (isRecord(execution.output) && isRecord(execution.output.feature_route) && Array.isArray(execution.output.feature_route.warnings)) {
+      return execution.output.feature_route.warnings.filter((warning): warning is string => typeof warning === 'string');
+    }
+    if (isRecord(execution.output) && Array.isArray(execution.output.warnings) && ['dataMappingAssistant'].includes(execution.toolName)) {
+      return execution.output.warnings.filter((warning): warning is string => typeof warning === 'string');
     }
     return [];
   });

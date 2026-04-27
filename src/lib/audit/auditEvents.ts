@@ -51,6 +51,11 @@ export type AuditEventType =
   | 'copilot.action_cancelled'
   | 'copilot.action_executed'
   | 'copilot.action_failed'
+  | 'ai.task_started'
+  | 'ai.task_completed'
+  | 'ai.task_failed'
+  | 'ai.output_rejected'
+  | 'ai.safety_blocked'
   | 'view.loaded';
 
 const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
@@ -105,19 +110,29 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'copilot.action_confirmed',
   'copilot.action_cancelled',
   'copilot.action_executed',
-  'copilot.action_failed'
+  'copilot.action_failed',
+  'ai.task_started',
+  'ai.task_completed',
+  'ai.task_failed',
+  'ai.output_rejected',
+  'ai.safety_blocked'
 ]);
 
 const SENSITIVE_METADATA_KEYS = [
   /raw.*contract/i,
   /raw.*invoice/i,
+  /raw.*usage/i,
+  /raw.*source/i,
   /contract.*text/i,
   /contract.*content/i,
   /invoice.*text/i,
   /invoice.*content/i,
   /invoice_rows?/i,
+  /usage_rows?/i,
   /contract_text/i,
   /prompt/i,
+  /gemini.*output/i,
+  /gemini.*response/i,
   /api[_-]?key/i,
   /authorization/i,
   /secret/i,
@@ -138,6 +153,8 @@ const SENSITIVE_METADATA_KEYS = [
   /llm_output/i,
   /model_response/i,
   /model_output/i,
+  /full_model_output/i,
+  /full_gemini_output/i,
   /response/i,
   /^notes?$/i,
   /free.*text/i,

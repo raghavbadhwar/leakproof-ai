@@ -14,6 +14,8 @@ import { copilotActionTransitionRequestSchema } from '@/lib/copilot/schema';
 import { POST as runExtractionPost } from '@/app/api/extraction/run/route';
 import { POST as runReconciliationPost } from '@/app/api/reconciliation/run/route';
 import { POST as generateReportPost } from '@/app/api/workspaces/[workspaceId]/report/route';
+import { POST as draftRecoveryNotePost } from '@/app/api/findings/[id]/recovery-note/route';
+import { POST as resolveContractHierarchyPost } from '@/app/api/workspaces/[workspaceId]/contract-hierarchy/resolve/route';
 import type { CopilotSupabaseClient } from '@/lib/copilot/context';
 
 export const runtime = 'nodejs';
@@ -96,6 +98,25 @@ function workflowRunners(request: Request, workspaceId: string): CopilotWorkflow
       const response = await generateReportPost(
         internalJsonRequest(request, `/api/workspaces/${workspaceId}/report`, {
           organization_id: organizationId
+        }),
+        { params: Promise.resolve({ workspaceId }) }
+      );
+      return readRouteJson(response);
+    },
+    draftRecoveryNote: async ({ organizationId, findingId }) => {
+      const response = await draftRecoveryNotePost(
+        internalJsonRequest(request, `/api/findings/${findingId}/recovery-note`, {
+          organization_id: organizationId
+        }),
+        { params: Promise.resolve({ id: findingId }) }
+      );
+      return readRouteJson(response);
+    },
+    resolveContractHierarchy: async ({ organizationId, customerId }) => {
+      const response = await resolveContractHierarchyPost(
+        internalJsonRequest(request, `/api/workspaces/${workspaceId}/contract-hierarchy/resolve`, {
+          organization_id: organizationId,
+          customer_id: customerId
         }),
         { params: Promise.resolve({ workspaceId }) }
       );

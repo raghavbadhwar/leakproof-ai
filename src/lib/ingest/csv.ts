@@ -182,7 +182,7 @@ export function parseMoneyToMinorUnits(value: string, label = 'money value'): nu
   return negative ? -amount : amount;
 }
 
-function parseCsv(csv: string): { headers: string[]; records: Record<string, string>[] } {
+export function parseCsv(csv: string): { headers: string[]; records: Record<string, string>[] } {
   const lines = csv.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) {
     throw new Error('CSV must include a header row and at least one data row.');
@@ -225,6 +225,18 @@ function splitCsvLine(line: string): string[] {
 
   values.push(current);
   return values;
+}
+
+export function serializeCsv(headers: readonly string[], records: readonly Record<string, string>[]): string {
+  return [
+    headers.map(escapeCsvCell).join(','),
+    ...records.map((record) => headers.map((header) => escapeCsvCell(record[header] ?? '')).join(','))
+  ].join('\n');
+}
+
+function escapeCsvCell(value: string): string {
+  if (!/[",\r\n]/.test(value)) return value;
+  return `"${value.replaceAll('"', '""')}"`;
 }
 
 function assertHeaders(actual: string[], requiredHeaders: string[]): void {

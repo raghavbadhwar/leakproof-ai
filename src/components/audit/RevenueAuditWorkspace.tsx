@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import {
   Activity,
   AlertTriangle,
+  ArrowRight,
   Bot,
   Bell,
   BarChart3,
@@ -23,7 +24,6 @@ import {
   Link2,
   Loader2,
   MailCheck,
-  MoreHorizontal,
   Percent,
   Play,
   Plus,
@@ -58,9 +58,27 @@ import {
 import type { Session } from '@supabase/supabase-js';
 import { createSupabaseBrowserClient } from '@/lib/db/supabaseBrowser';
 import type { AnalyticsPoint, WorkspaceAnalyticsPayload } from '@/lib/analytics/workspaceAnalytics';
+import type { RootCauseAnalyticsPayload } from '@/lib/analytics/rootCauseAnalytics';
 import { isCustomerFacingFindingStatus } from '@/lib/analytics/statuses';
+import {
+  buildGuidedAuditSummary,
+  buildReviewQueue,
+  reviewQueueKindLabel,
+  type ReviewQueueItem
+} from '@/lib/analytics/guidedAudit';
+import type { AuditReadinessPayload } from '@/lib/ai/auditReadiness';
+import {
+  dataMappingFieldsByDocumentType,
+  requiredDataMappingFieldsByDocumentType,
+  type ConfirmedDataMapping,
+  type DataMappingDocumentType,
+  type DataMappingFieldMapping,
+  type DataMappingSuggestion,
+  type DataMappingTargetField
+} from '@/lib/ai/dataMappingSchema';
 import { CopilotPanel } from '@/components/copilot/CopilotPanel';
 import { AppShell } from '@/components/layout/AppShell';
+import { AuditReadinessCard } from '@/components/dashboard/AuditReadinessCard';
 import { ExecutiveReportPreview, type ExecutiveReportViewData } from '@/components/report/ExecutiveReportPreview';
 import { ChartCardShell as ChartCard } from '@/components/ui/chart-card-shell';
 import { DataTable } from '@/components/ui/data-table';
@@ -79,6 +97,8 @@ type Organization = {
 };
 
 type OrganizationRole = 'owner' | 'admin' | 'reviewer' | 'member' | 'viewer';
+
+type UploadDocumentType = 'contract' | DataMappingDocumentType;
 
 type OrganizationMember = {
   id: string;
@@ -141,6 +161,71 @@ type ContractTermRow = {
   updated_at?: string | null;
 };
 
+type ContractDocumentRole =
+  | 'master_agreement'
+  | 'order_form'
+  | 'renewal_order'
+  | 'amendment'
+  | 'statement_of_work'
+  | 'side_letter'
+  | 'pricing_schedule'
+  | 'discount_approval'
+  | 'unknown';
+
+type ContractHierarchyResolution = {
+  status: 'completed' | 'partial' | 'needs_review';
+  documentRoles: Array<{
+    sourceDocumentId: string;
+    role: ContractDocumentRole;
+    confidence: number;
+    reason: string;
+  }>;
+  relationships: Array<{
+    sourceDocumentId: string;
+    relatedSourceDocumentId: string;
+    relationshipType: string;
+    effectiveDate?: string;
+    confidence: number;
+    reason: string;
+  }>;
+  controllingTerms: Array<{
+    termType: string;
+    controllingTermId: string;
+    sourceDocumentId: string;
+    documentRole: ContractDocumentRole;
+    supersededTermIds: string[];
+    reason: string;
+    confidence: number;
+    needsReview: boolean;
+  }>;
+  supersededTerms: Array<{
+    termId: string;
+    supersededByTermId: string;
+    termType: string;
+    relationshipType: string;
+    reason: string;
+    confidence: number;
+  }>;
+  conflicts: Array<{
+    termType: string;
+    termIds: string[];
+    recommendedTermId?: string;
+    risk: 'amendment_conflict' | 'unresolved_conflict';
+    reason: string;
+    needsReview: true;
+  }>;
+  unresolvedItems: Array<{
+    kind: string;
+    termType?: string;
+    documentIds: string[];
+    termIds: string[];
+    reviewerAction: string;
+  }>;
+  reviewerChecklist: string[];
+  warnings: string[];
+  generatedAt: string;
+};
+
 type FindingRow = {
   id: string;
   customer_id?: string | null;
@@ -190,13 +275,35 @@ type EvidenceCandidateRow = {
 
 type FindingAiRecommendation = 'strong_evidence' | 'weak_evidence' | 'conflicting_evidence' | 'needs_more_evidence';
 
+type EvidenceQualityReviewJson = {
+  quality?: string;
+  score?: number;
+  requiredEvidencePresent?: boolean;
+  contractEvidencePresent?: boolean;
+  invoiceOrUsageEvidencePresent?: boolean;
+  formulaSupported?: boolean;
+  missingEvidence?: string[];
+  conflictingSignals?: string[];
+  reviewerChecklist?: string[];
+  recommendation?: string;
+  summary?: string;
+  strengths?: string[];
+  gaps?: string[];
+};
+
+type FalsePositiveReviewJson = {
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical' | string;
+  riskReasons?: string[];
+  suggestedChecks?: string[];
+  blockingIssues?: string[];
+  recommendation?: string;
+};
+
 type FindingCritiqueJson = {
-  evidenceQuality?: {
-    score?: number;
-    summary?: string;
-    strengths?: string[];
-    gaps?: string[];
-  };
+  schemaVersion?: string;
+  reviewType?: string;
+  evidenceQuality?: EvidenceQualityReviewJson | null;
+  falsePositive?: FalsePositiveReviewJson | null;
   falsePositiveRisks?: Array<{
     risk?: string;
     severity?: 'low' | 'medium' | 'high' | string;
@@ -206,10 +313,16 @@ type FindingCritiqueJson = {
   reviewerChecklist?: string[];
   recommendation?: FindingAiRecommendation | string;
   recommendationRationale?: string;
+  fallbackReason?: string | null;
   safety?: {
+    canApproveEvidence?: boolean;
     canApproveFinding?: boolean;
     canChangeFindingAmount?: boolean;
     canChangeFindingStatus?: boolean;
+    canMarkCustomerReady?: boolean;
+    canExportReports?: boolean;
+    canSendEmails?: boolean;
+    canCreateInvoices?: boolean;
   };
 };
 
@@ -228,6 +341,51 @@ type FindingDetail = {
   finding: FindingRow;
   evidence: EvidenceItemRow[];
   latest_critique?: FindingAiCritiqueRow | null;
+};
+
+type RecoveryNoteDraft = {
+  internalNote: string;
+  customerFacingDraft: string | null;
+  evidenceSummary: string;
+  calculationSummary: string;
+  recommendedTone: string;
+  humanReviewRequired: true;
+  warnings: string[];
+  referencedEntities: Array<{ type: string; id: string; label?: string }>;
+};
+
+type CfoSummaryDraft = {
+  executiveSummary: string;
+  totalApprovedLeakageText: string;
+  internalExposureText: string;
+  topDrivers: Array<{
+    scope: string;
+    label: string;
+    amountText: string;
+    findingCount: number;
+    reference: string;
+  }>;
+  priorityActions: string[];
+  reportReadiness: {
+    customerFacingLeakageText: string;
+    internalUnapprovedExposureText: string;
+    dismissedNotRecoverableText: string;
+    riskOnlyItemsText: string;
+    exportable: boolean;
+    blockers: string[];
+    narrative: string;
+  };
+  caveats: string[];
+  humanReviewRequired: true;
+  referencedEntities: Array<{ type: string; id: string; label?: string }>;
+};
+
+type ReportDraftRecoveryNote = {
+  findingId: string;
+  findingTitle: string;
+  internalNote: string;
+  customerFacingDraft: string;
+  addedAt: string;
 };
 
 type InvoiceRow = {
@@ -257,6 +415,39 @@ type SearchResult = {
 
 type ExecutiveReport = ExecutiveReportViewData;
 
+type UploadMappingDraft = DataMappingSuggestion & {
+  documentType: DataMappingDocumentType;
+  file: File;
+  fileName: string;
+  fileText: string;
+};
+
+type DataMappingConfirmResponse = {
+  document_type: DataMappingDocumentType;
+  canonical_headers: readonly DataMappingTargetField[];
+  parse_preview: {
+    row_count: number;
+    safe_preview: Array<Record<string, string>>;
+    warnings: string[];
+  };
+};
+
+type NextActionDisplay = {
+  title: string;
+  explanation: string;
+  ctaLabel: string;
+  deepLink: string;
+};
+
+type UploadGuidanceCard = {
+  title: string;
+  detail: string;
+  count: number;
+  status: string;
+  nextStep: string;
+  actionHref: string;
+};
+
 type WorkspaceSnapshot = {
   documents: SourceDocument[];
   customers: Customer[];
@@ -265,6 +456,13 @@ type WorkspaceSnapshot = {
   invoices: InvoiceRow[];
   usage: UsageRow[];
   candidates: EvidenceCandidateRow[];
+};
+
+type ContractHierarchyResponse = {
+  resolution: ContractHierarchyResolution;
+  relationships_inserted: number;
+  terms_marked_needs_review: number;
+  approved_terms_left_unchanged: string[];
 };
 
 type AccountRiskRow = {
@@ -285,6 +483,7 @@ type AuditSection =
   | 'evidence'
   | 'terms'
   | 'contracts'
+  | 'contract-hierarchy'
   | 'records'
   | 'revenue-records'
   | 'findings'
@@ -305,11 +504,11 @@ const findingStatusActions: Array<{ value: FindingStatusAction; label: string; t
   { value: 'dismissed', label: 'Dismiss', tone: 'danger' }
 ];
 
-const documentTypes = [
-  { value: 'contract', label: 'Contract' },
-  { value: 'invoice_csv', label: 'Invoice CSV' },
-  { value: 'usage_csv', label: 'Usage CSV' },
-  { value: 'customer_csv', label: 'Customer CSV' }
+const documentTypes: Array<{ value: UploadDocumentType; label: string }> = [
+  { value: 'contract', label: 'Contracts' },
+  { value: 'invoice_csv', label: 'Invoices' },
+  { value: 'usage_csv', label: 'Usage / seats' },
+  { value: 'customer_csv', label: 'Customer list optional' }
 ];
 
 export function RevenueAuditWorkspace({ section = 'overview', findingId }: { section?: AuditSection; findingId?: string }) {
@@ -337,11 +536,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const [usage, setUsage] = useState<UsageRow[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState('');
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
-  const [documentType, setDocumentType] = useState('contract');
+  const [documentType, setDocumentType] = useState<UploadDocumentType>('contract');
   const [uploadCustomerId, setUploadCustomerId] = useState('');
   const [uploadCustomerExternalId, setUploadCustomerExternalId] = useState('');
   const [uploadCustomerName, setUploadCustomerName] = useState('');
   const [uploadCustomerDomain, setUploadCustomerDomain] = useState('');
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [mappingDraft, setMappingDraft] = useState<UploadMappingDraft | null>(null);
+  const [mappingPreview, setMappingPreview] = useState<DataMappingConfirmResponse | null>(null);
   const [workspaceName, setWorkspaceName] = useState('Revenue Leakage Audit');
   const [organizationName, setOrganizationName] = useState('LeakProof Customer Org');
   const [inviteEmail, setInviteEmail] = useState('');
@@ -353,7 +555,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [report, setReport] = useState<ExecutiveReport | null>(null);
   const [reportPackId, setReportPackId] = useState('');
+  const [selectedHierarchyCustomerId, setSelectedHierarchyCustomerId] = useState('');
+  const [contractHierarchy, setContractHierarchy] = useState<ContractHierarchyResponse | null>(null);
+  const [recoveryNoteDrafts, setRecoveryNoteDrafts] = useState<Record<string, RecoveryNoteDraft>>({});
+  const [reportDraftRecoveryNotes, setReportDraftRecoveryNotes] = useState<ReportDraftRecoveryNote[]>([]);
+  const [cfoSummaryDraft, setCfoSummaryDraft] = useState<CfoSummaryDraft | null>(null);
   const [analytics, setAnalytics] = useState<WorkspaceAnalyticsPayload | null>(null);
+  const [rootCauseAnalytics, setRootCauseAnalytics] = useState<RootCauseAnalyticsPayload | null>(null);
+  const [readiness, setReadiness] = useState<AuditReadinessPayload | null>(null);
   const [auditPeriod, setAuditPeriod] = useState('Q2 2026');
   const [autonomousMode, setAutonomousMode] = useState(false);
   const [autonomousConsent, setAutonomousConsent] = useState(false);
@@ -374,6 +583,15 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const selectedFinding = findings.find((finding) => finding.id === selectedFindingId);
   const openFindings = findings.filter((finding) => ['draft', 'needs_review'].includes(finding.status));
   const approvedFindings = findings.filter((finding) => isCustomerFacingFindingStatus(finding.status));
+  const hierarchyCustomerId = selectedHierarchyCustomerId || customers[0]?.id || '';
+  const hierarchyDocuments = documents
+    .filter((document) => document.document_type === 'contract' && (!hierarchyCustomerId || document.customer_id === hierarchyCustomerId))
+    .sort((left, right) => roleSortOrder(roleForDocument(left, contractHierarchy?.resolution)) - roleSortOrder(roleForDocument(right, contractHierarchy?.resolution)) || left.created_at.localeCompare(right.created_at));
+  const hierarchyTerms = terms.filter((term) => !hierarchyCustomerId || term.customer_id === hierarchyCustomerId);
+  const hierarchyConflicts = contractHierarchy?.resolution.conflicts ?? [];
+  const hierarchyUnresolved = contractHierarchy?.resolution.unresolvedItems ?? [];
+  const mappingRequiredMissingFields = mappingDraft ? missingDataMappingFields(mappingDraft.documentType, mappingDraft.field_mappings) : [];
+  const mappingTargetFields = mappingDraft ? dataMappingFieldsByDocumentType[mappingDraft.documentType] : [];
   const activeSection = section;
   const canonicalSection: Record<AuditSection, AuditSection> = {
     overview: 'overview',
@@ -384,6 +602,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     evidence: 'evidence',
     terms: 'contracts',
     contracts: 'contracts',
+    'contract-hierarchy': 'contract-hierarchy',
     records: 'revenue-records',
     'revenue-records': 'revenue-records',
     findings: 'findings',
@@ -425,6 +644,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       title: 'Contract terms',
       detail: 'Review the terms extracted by AI before reconciliation uses them.',
       icon: <ClipboardCheck size={16} />
+    },
+    {
+      id: 'contract-hierarchy',
+      href: '/app/contract-hierarchy',
+      label: 'Hierarchy',
+      title: 'Contract hierarchy',
+      detail: 'Resolve MSA, order form, amendment, renewal, and discount precedence before relying on conflicting terms.',
+      icon: <Workflow size={16} />
     },
     {
       id: 'revenue-records',
@@ -526,6 +753,8 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const internalPipelineAnalytics = analytics?.internalPipeline;
   const reviewBurdenAnalytics = analytics?.reviewBurden;
   const operationsAnalytics = analytics?.operations;
+  const customerFacingRootCauses = rootCauseAnalytics?.customerFacing;
+  const internalRootCauses = rootCauseAnalytics?.internalPipeline;
   const displayCurrency = analytics?.currency ?? findings[0]?.currency ?? 'USD';
   const customerFacingTotalMinor = customerFacingAnalytics?.totalLeakageMinor ?? approvedFindings.reduce((sum, finding) => sum + finding.estimated_amount_minor, 0);
   const internalPipelineTotalMinor = internalPipelineAnalytics?.unapprovedExposureMinor ?? openFindings.reduce((sum, finding) => sum + finding.estimated_amount_minor, 0);
@@ -554,27 +783,35 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   const accountRiskRows = buildAccountRiskRows(findings, evidenceCandidates);
   const highPriorityFindings = findings.filter((finding) => ['high', 'critical'].includes(String(finding.severity ?? ''))).length;
   const parsingFailures = documents.filter((document) => ['error', 'failed'].includes(document.parse_status) || document.embedding_status === 'error').length;
-  const readinessItems = [
-    {
-      label: 'Documents',
-      value: `${embeddedDocuments}/${documents.length} embedded`,
-      state: documents.length > 0 ? 'Ready' : 'Needed',
-      tone: documents.length > 0 ? 'good' : 'warning'
-    },
-    {
-      label: 'AI terms',
-      value: terms.length > 0 ? `${approvedTerms}/${terms.length} approved` : 'Run extraction',
-      state: terms.length > 0 ? 'In review' : 'Needed',
-      tone: approvedTerms === terms.length && terms.length > 0 ? 'good' : 'warning'
-    },
-    {
-      label: 'Evidence',
-      value: `${evidenceCandidates.length} candidate${evidenceCandidates.length === 1 ? '' : 's'}`,
-      state: evidenceCandidates.length > 0 ? 'Linked' : 'Open',
-      tone: evidenceCandidates.length > 0 ? 'good' : 'muted'
-    }
-  ];
-
+  const readinessIssues = readiness?.missingData ?? [];
+  const guidedSummary = buildGuidedAuditSummary({ findings, readinessIssues });
+  const reviewQueue = buildReviewQueue({ documents, terms, findings, evidenceCandidates, readinessIssues });
+  const reviewQueuePreview = reviewQueue.slice(0, 7);
+  const topGuidedFindings = guidedSummary.topCustomerFacingFindings.length > 0
+    ? guidedSummary.topCustomerFacingFindings
+    : guidedSummary.topInternalFindings;
+  const topBlockers = guidedSummary.topBlockers;
+  const reportBlockers = readinessIssues.filter((issue) => issue.category === 'report_blockers');
+  const pendingEvidenceCandidates = evidenceCandidates.filter((candidate) =>
+    ['suggested', 'pending', 'needs_review'].includes(candidate.approval_state)
+  );
+  const nextBestAction = readiness?.nextBestAction ?? buildFallbackNextBestAction({
+    documents,
+    terms,
+    findings,
+    evidenceCandidates,
+    reportPackId
+  });
+  const uploadGuidanceCards = buildUploadGuidanceCards({ documents, invoices, usage, terms, mappingDraft });
+  const hasAnalyticsData = Boolean(
+    analytics &&
+    (
+      customerFacingTotalMinor > 0 ||
+      internalPipelineTotalMinor > 0 ||
+      (customerFacingAnalytics?.trend.length ?? 0) > 0 ||
+      (reviewBurdenAnalytics?.allStatuses.length ?? 0) > 0
+    )
+  );
   const fetchWorkspaceSnapshot = useCallback(async (
     activeSession: Session,
     organizationId: string,
@@ -603,7 +840,13 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   }, []);
 
   const refreshWorkspaceData = useCallback(async (activeSession: Session, organizationId: string, workspaceId: string) => {
-    const snapshot = await fetchWorkspaceSnapshot(activeSession, organizationId, workspaceId);
+    const [snapshot, readinessPayload] = await Promise.all([
+      fetchWorkspaceSnapshot(activeSession, organizationId, workspaceId),
+      apiFetch<{ readiness: AuditReadinessPayload }>(
+        activeSession,
+        `/api/workspaces/${workspaceId}/readiness?organization_id=${organizationId}`
+      )
+    ]);
 
     setDocuments(snapshot.documents);
     setCustomers(snapshot.customers);
@@ -624,14 +867,22 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     setInvoices(snapshot.invoices);
     setUsage(snapshot.usage);
     setEvidenceCandidates(snapshot.candidates);
+    setReadiness(readinessPayload.readiness);
   }, [fetchWorkspaceSnapshot, findingId]);
 
   const refreshWorkspaceAnalytics = useCallback(async (activeSession: Session, organizationId: string, workspaceId: string) => {
-    const payload = await apiFetch<{ analytics: WorkspaceAnalyticsPayload }>(
-      activeSession,
-      `/api/workspaces/${workspaceId}/analytics?organization_id=${organizationId}`
-    );
-    setAnalytics(payload.analytics);
+    const [analyticsPayload, rootCausePayload] = await Promise.all([
+      apiFetch<{ analytics: WorkspaceAnalyticsPayload }>(
+        activeSession,
+        `/api/workspaces/${workspaceId}/analytics?organization_id=${organizationId}`
+      ),
+      apiFetch<{ rootCauses: RootCauseAnalyticsPayload }>(
+        activeSession,
+        `/api/workspaces/${workspaceId}/root-causes?organization_id=${organizationId}`
+      )
+    ]);
+    setAnalytics(analyticsPayload.analytics);
+    setRootCauseAnalytics(rootCausePayload.rootCauses);
   }, []);
 
   const refreshOrganizations = useCallback(async (activeSession: Session) => {
@@ -741,6 +992,20 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   }, [session, selectedOrgId, selectedWorkspaceId, refreshWorkspaceData, refreshWorkspaceAnalytics]);
 
   useEffect(() => {
+    if (selectedHierarchyCustomerId && customers.some((customer) => customer.id === selectedHierarchyCustomerId)) return;
+    let cancelled = false;
+    const nextCustomerId = customers[0]?.id ?? '';
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setSelectedHierarchyCustomerId(nextCustomerId);
+      setContractHierarchy(null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [customers, selectedHierarchyCustomerId]);
+
+  useEffect(() => {
     if (!session || !selectedOrgId || !selectedFindingId) return;
 
     startTransition(() => {
@@ -815,6 +1080,116 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     return session;
   }
 
+  async function prepareCsvMappingReview(files: File[]): Promise<boolean> {
+    if (!isDataMappingDocumentType(documentType)) return false;
+    if (!selectedOrgId || !selectedWorkspaceId) {
+      setError('Select an organization and workspace before mapping columns.');
+      return true;
+    }
+    if (files.length !== 1) {
+      setError('Review one CSV at a time so the confirmed mapping stays attached to the right file.');
+      return true;
+    }
+
+    const activeSession = requireActiveSession();
+    const file = files[0];
+    const fileText = await file.text();
+    const csvSample = parseCsvSampleForMapping(fileText);
+    const suggestion = await apiFetch<DataMappingSuggestion>(
+      activeSession,
+      `/api/workspaces/${selectedWorkspaceId}/data-mapping/suggest`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: selectedOrgId,
+          document_type: documentType,
+          file_name: file.name,
+          csv_headers: csvSample.headers,
+          sample_rows: csvSample.sampleRows
+        })
+      }
+    );
+
+    setMappingDraft({
+      ...suggestion,
+      documentType,
+      file,
+      fileName: file.name,
+      fileText
+    });
+    setMappingPreview(null);
+    setMessage('AI detected your columns. Review and confirm the mapping before upload.');
+    return true;
+  }
+
+  function updateMappingField(uploadedColumn: string, mappedField: string) {
+    setMappingDraft((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        field_mappings: current.field_mappings.map((mapping) =>
+          mapping.uploaded_column === uploadedColumn
+            ? {
+                ...mapping,
+                mapped_field: mappedField ? mappedField as DataMappingTargetField : null,
+                confidence: mapping.mapped_field === mappedField ? mapping.confidence : 0.6,
+                rationale: mapping.mapped_field === mappedField ? mapping.rationale : 'Reviewer edited mapping.'
+              }
+            : mapping
+        )
+      };
+    });
+  }
+
+  async function confirmCsvMappingAndUpload() {
+    if (!mappingDraft) return;
+    if (!selectedOrgId || !selectedWorkspaceId) {
+      setError('Select an organization and workspace before confirming the mapping.');
+      return;
+    }
+    if (mappingRequiredMissingFields.length > 0) {
+      setError(`Map required fields before upload: ${mappingRequiredMissingFields.join(', ')}.`);
+      return;
+    }
+
+    const activeSession = requireActiveSession();
+    const confirmedMapping: ConfirmedDataMapping = {
+      document_type: mappingDraft.documentType,
+      field_mappings: mappingDraft.field_mappings
+    };
+    const preview = await apiFetch<DataMappingConfirmResponse>(
+      activeSession,
+      `/api/workspaces/${selectedWorkspaceId}/data-mapping/confirm`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: selectedOrgId,
+          document_type: mappingDraft.documentType,
+          file_name: mappingDraft.fileName,
+          csv_text: mappingDraft.fileText,
+          confirmed_mapping: confirmedMapping
+        })
+      }
+    );
+    setMappingPreview(preview);
+
+    const form = new FormData();
+    form.set('organization_id', selectedOrgId);
+    form.set('workspace_id', selectedWorkspaceId);
+    form.set('document_type', mappingDraft.documentType);
+    form.set('confirmed_mapping', JSON.stringify(confirmedMapping));
+    form.set('file', mappingDraft.file);
+    await apiFetch(activeSession, '/api/documents/upload', { method: 'POST', body: form });
+    setMessage(`Mapping confirmed, ${preview.parse_preview.row_count} rows parsed, and ${mappingDraft.fileName} uploaded.`);
+    await Promise.all([
+      refreshWorkspaceData(activeSession, selectedOrgId, selectedWorkspaceId),
+      refreshWorkspaceAnalytics(activeSession, selectedOrgId, selectedWorkspaceId)
+    ]);
+    setMappingDraft(null);
+    setMappingPreview(null);
+    if (uploadInputRef.current) uploadInputRef.current.value = '';
+  }
+
   async function updateMemberRole(memberId: string, role: OrganizationRole) {
     const activeSession = requireActiveSession();
     await apiFetch(activeSession, `/api/organizations/${selectedOrgId}/members/${memberId}`, {
@@ -870,6 +1245,33 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
   async function copyInviteText(invite: OrganizationInvite) {
     await navigator.clipboard.writeText(invite.invite_text);
     setMessage('Invite text copied.');
+  }
+
+  async function resolveContractHierarchyForCustomer() {
+    if (!selectedOrgId || !selectedWorkspaceId || !hierarchyCustomerId) {
+      setError('Choose a customer with contract documents before resolving hierarchy.');
+      return;
+    }
+
+    const activeSession = requireActiveSession();
+    const payload = await apiFetch<ContractHierarchyResponse>(
+      activeSession,
+      `/api/workspaces/${selectedWorkspaceId}/contract-hierarchy/resolve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          organization_id: selectedOrgId,
+          customer_id: hierarchyCustomerId
+        })
+      }
+    );
+    setContractHierarchy(payload);
+    setMessage(
+      payload.resolution.conflicts.length > 0 || payload.resolution.unresolvedItems.length > 0
+        ? 'Hierarchy resolved with conflicts. Review the flagged terms before relying on related findings.'
+        : 'Contract hierarchy resolved. Review the controlling terms before running reconciliation.'
+    );
+    await refreshWorkspaceData(activeSession, selectedOrgId, selectedWorkspaceId);
   }
 
   async function updateTerm(term: ContractTermRow, reviewStatus: 'approved' | 'edited' | 'needs_review' | 'rejected', includeDraft = false) {
@@ -937,12 +1339,78 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
 
   async function runFindingAiReview(findingId: string) {
     const activeSession = requireActiveSession();
-    await apiFetch(activeSession, `/api/findings/${findingId}/ai-critique`, {
+    await apiFetch(activeSession, `/api/findings/${findingId}/ai-review`, {
       method: 'POST',
-      body: JSON.stringify({ organization_id: selectedOrgId })
+      body: JSON.stringify({
+        organization_id: selectedOrgId,
+        workspace_id: selectedWorkspaceId,
+        review_type: 'both'
+      })
     });
     setMessage('AI evidence review saved. A human reviewer still controls approval.');
     await refreshFindingDetail(activeSession, selectedOrgId, findingId);
+  }
+
+  async function draftRecoveryNote(findingId: string) {
+    const activeSession = requireActiveSession();
+    const payload = await apiFetch<{
+      recovery_note: RecoveryNoteDraft;
+      customer_facing_enabled: boolean;
+      external_actions: { email_sent: boolean; invoice_created: boolean; report_exported: boolean };
+    }>(activeSession, `/api/findings/${findingId}/recovery-note`, {
+      method: 'POST',
+      body: JSON.stringify({ organization_id: selectedOrgId, include_customer_facing_draft: true })
+    });
+    setRecoveryNoteDrafts((current) => ({
+      ...current,
+      [findingId]: payload.recovery_note
+    }));
+    setMessage(payload.customer_facing_enabled
+      ? 'Recovery note drafted. Nothing was sent or invoiced.'
+      : 'Internal recovery note drafted. Customer-facing text is blocked until review and evidence are ready.');
+  }
+
+  async function copyRecoveryNoteText(text: string, label: string) {
+    await navigator.clipboard.writeText(text);
+    setMessage(`${label} copied. Review before using it externally.`);
+  }
+
+  async function addRecoveryNoteToReportDraft(finding: FindingRow, draft: RecoveryNoteDraft) {
+    const customerFacingDraft = draft.customerFacingDraft;
+    if (!customerFacingDraft || !isCustomerFacingFindingStatus(finding.status)) {
+      setError('Only customer-ready recovery drafts can be added to the local report draft.');
+      return;
+    }
+    setReportDraftRecoveryNotes((current) => [
+      {
+        findingId: finding.id,
+        findingTitle: finding.title,
+        internalNote: draft.internalNote,
+        customerFacingDraft,
+        addedAt: new Date().toISOString()
+      },
+      ...current.filter((item) => item.findingId !== finding.id)
+    ]);
+    setMessage('Recovery note added to the local report draft. Nothing was exported or sent.');
+  }
+
+  async function draftCfoSummary() {
+    if (!selectedOrgId || !selectedWorkspaceId) {
+      setError('Select a workspace before drafting a CFO summary.');
+      return;
+    }
+
+    const activeSession = requireActiveSession();
+    const payload = await apiFetch<{ cfo_summary: CfoSummaryDraft }>(
+      activeSession,
+      `/api/workspaces/${selectedWorkspaceId}/cfo-summary`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: selectedOrgId })
+      }
+    );
+    setCfoSummaryDraft(payload.cfo_summary);
+    setMessage('CFO summary drafted. It is advisory and still needs human review.');
   }
 
   async function updateFindingStatus(findingId: string, status: FindingStatusAction) {
@@ -1268,6 +1736,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             <LoadingSkeleton rows={2} />
           </>
         ) : null}
+        <NextBestActionBanner action={nextBestAction} queueCount={reviewQueue.length} />
 
         {activeSection === 'overview' ? (
           <div className="dashboard-content">
@@ -1283,6 +1752,55 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
                 <span>Core control</span>
                 <strong>LLM extracts. Code calculates. Human approves.</strong>
               </div>
+            </section>
+
+            <section className="guided-home-grid" aria-label="Guided audit home">
+              <GuidedHomeCard
+                eyebrow="What is leaking"
+                title={formatMoney(guidedSummary.customerFacingApprovedMinor, displayCurrency)}
+                detail={guidedSummary.customerFacingFindingCount > 0
+                  ? `${guidedSummary.customerFacingFindingCount} approved customer-facing finding${guidedSummary.customerFacingFindingCount === 1 ? '' : 's'}.`
+                  : guidedSummary.internalUnapprovedExposureMinor > 0
+                    ? `${formatMoney(guidedSummary.internalUnapprovedExposureMinor, displayCurrency)} is still internal until a human approves it.`
+                    : 'No deterministic leakage findings have been calculated yet.'}
+                status={guidedSummary.customerFacingFindingCount > 0 ? 'Customer-facing' : 'Not customer-ready'}
+                actionHref="/app/findings"
+                actionLabel={guidedSummary.customerFacingFindingCount > 0 ? 'Open findings' : 'Run reconciliation'}
+              >
+                <MiniFindingList findings={topGuidedFindings} currency={displayCurrency} empty="No findings yet. Upload data, review terms, then run reconciliation." />
+              </GuidedHomeCard>
+              <GuidedHomeCard
+                eyebrow="What needs review"
+                title={`${reviewQueue.length} item${reviewQueue.length === 1 ? '' : 's'}`}
+                detail={guidedSummary.internalUnapprovedExposureMinor > 0
+                  ? `${formatMoney(guidedSummary.internalUnapprovedExposureMinor, displayCurrency)} remains internal pipeline exposure.`
+                  : 'No unapproved financial exposure is currently waiting for review.'}
+                status={reviewQueue.length > 0 ? 'Needs finance review' : 'Clear'}
+                actionHref="/app/findings"
+                actionLabel="Open review queue"
+              >
+                <MiniReviewQueue items={reviewQueuePreview.slice(0, 3)} empty="The review queue is clear." />
+              </GuidedHomeCard>
+              <GuidedHomeCard
+                eyebrow="Ready to report"
+                title={`${guidedSummary.readyToReportCount} finding${guidedSummary.readyToReportCount === 1 ? '' : 's'}`}
+                detail={reportBlockers.length > 0
+                  ? `${reportBlockers.length} report blocker${reportBlockers.length === 1 ? '' : 's'} must be fixed before export.`
+                  : 'Report-ready means approved findings with approved evidence and calculation inputs.'}
+                status={reportBlockers.length > 0 ? 'Blocked' : guidedSummary.readyToReportCount > 0 ? 'Ready' : 'Not enough data'}
+                actionHref="/app/reports"
+                actionLabel={guidedSummary.readyToReportCount > 0 ? 'Open report' : 'Check blockers'}
+              >
+                <MiniBlockerList items={topBlockers.slice(0, 3)} empty="No report blockers are visible right now." />
+              </GuidedHomeCard>
+              <GuidedHomeCard
+                eyebrow="What to do next"
+                title={nextBestAction.title}
+                detail={nextBestAction.explanation}
+                status="Recommended next step"
+                actionHref={nextBestAction.deepLink}
+                actionLabel={nextBestAction.ctaLabel}
+              />
             </section>
 
             <section className="metric-grid kpi-grid" aria-label="Audit summary">
@@ -1383,24 +1901,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               </div>
 
               <aside className="dashboard-rail">
-                <div className="dashboard-card readiness-card">
-                  <div className="dashboard-card-header">
-                    <h3>Audit Readiness</h3>
-                    <button type="button" className="icon-button" aria-label="Audit readiness actions">
-                      <MoreHorizontal size={20} />
-                    </button>
-                  </div>
-                  <div className="readiness-list">
-                    {readinessItems.map((item) => (
-                      <div key={item.label} className="readiness-row">
-                        <span>{item.label}</span>
-                        <strong>{item.value}</strong>
-                        <StatusBadge value={item.state} tone={item.tone as 'good' | 'warning' | 'muted'} />
-                      </div>
-                    ))}
-                  </div>
-                  <Link className="button-link secondary manage-button" href="/app/uploads">Manage Workspace</Link>
-                </div>
+                <AuditReadinessCard readiness={readiness} isBusy={isPending} />
 
                 <div className="agent-card">
                   <h3>Analysis controls</h3>
@@ -1635,6 +2136,19 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
         {activeSection === 'uploads' ? (
         <section id="uploads" className="workspace-section">
           <SectionHeader icon={<Upload size={18} />} title="Uploads" detail="Contracts, invoice exports, and usage exports are stored under org-scoped paths." />
+          <section className="upload-guidance-grid" aria-label="Upload checklist">
+            {uploadGuidanceCards.map((card) => (
+              <article key={card.title} className="upload-guidance-card">
+                <div>
+                  <span>{card.title}</span>
+                  <strong>{card.count}</strong>
+                </div>
+                <p>{card.detail}</p>
+                <StatusBadge value={card.status} tone={card.status === 'Ready' ? 'good' : card.status === 'Needs mapping' || card.status === 'Needs customer match' ? 'warning' : 'muted'} />
+                <Link href={card.actionHref}>{card.nextStep}</Link>
+              </article>
+            ))}
+          </section>
           <section className="metric-grid compact-metrics">
             <Metric label="Contracts" value={String(documents.filter((document) => document.document_type === 'contract').length)} detail="Uploaded source agreements" />
             <Metric label="Invoices" value={String(documents.filter((document) => document.document_type === 'invoice_csv').length)} detail="Invoice CSV batches" />
@@ -1646,6 +2160,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
           <ChartCard title="Document processing pipeline" scope="Internal pipeline">
             <FunnelPanel points={documentPipelinePoints} />
           </ChartCard>
+          {documents.length === 0 ? (
+            <EmptyState
+              title="No documents yet"
+              detail="Start with contracts, invoice exports, and usage or seat data. Customer list uploads are optional and help matching."
+              actionHref="/app/uploads"
+              actionLabel="Upload missing data"
+            />
+          ) : null}
           <form
             className="upload-intake"
             onSubmit={(event) => {
@@ -1654,6 +2176,9 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               const files = Array.from(input.files ?? []);
               if (files.length === 0 || !selectedOrgId || !selectedWorkspaceId) return setError('Choose at least one file and workspace first.');
               runTask(async () => {
+                if (await prepareCsvMappingReview(files)) return;
+                setMappingDraft(null);
+                setMappingPreview(null);
                 setUploadProgress({ completed: 0, total: files.length });
                 for (const [index, file] of files.entries()) {
                   const form = new FormData();
@@ -1685,14 +2210,22 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
           >
             <label className="upload-dropzone">
               <Upload size={28} />
-              <strong>Drop contracts, invoices, usage records, or seat data here</strong>
-              <span>PDF, DOCX, TXT, and CSV files. Batch upload is supported; choose the document class before sending.</span>
-              <input name="file" type="file" multiple />
+              <strong>Drop the file for the selected step</strong>
+              <span>Contracts can be PDF, DOCX, or TXT. Invoices, usage, seats, and customer lists should be CSV and will ask for column mapping.</span>
+              <input ref={uploadInputRef} name="file" type="file" multiple />
             </label>
             <div className="upload-sidecar">
               <label>
                 Document classification
-                <select value={documentType} onChange={(event) => setDocumentType(event.target.value)} aria-label="Document type">
+                <select
+                  value={documentType}
+                  onChange={(event) => {
+                    setDocumentType(event.target.value as UploadDocumentType);
+                    setMappingDraft(null);
+                    setMappingPreview(null);
+                  }}
+                  aria-label="Document type"
+                >
                   {documentTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
                 </select>
               </label>
@@ -1743,20 +2276,111 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
                   <meter min={0} max={uploadProgress.total} value={uploadProgress.completed} />
                 </div>
               ) : null}
-              <button type="submit"><Upload size={16} /> Upload batch</button>
+              <button type="submit"><Upload size={16} /> {isDataMappingDocumentType(documentType) ? 'Review columns' : 'Upload batch'}</button>
             </div>
           </form>
+          {mappingDraft ? (
+            <section className="mapping-review-panel">
+              <div className="mapping-review-header">
+                <div>
+                  <p className="eyebrow">AI detected your columns</p>
+                  <h3>{mappingDraft.fileName}</h3>
+                  <p className="muted">
+                    Suggested type: {labelize(mappingDraft.suggested_document_type)}. Review every field before LeakProof parses the CSV.
+                  </p>
+                </div>
+                <StatusBadge value={mappingDraft.mapping_source === 'gemini' ? 'Gemini suggestion' : 'Fuzzy fallback'} tone="muted" />
+              </div>
+              {mappingDraft.warnings.length > 0 ? (
+                <div className="mapping-warning-list">
+                  {mappingDraft.warnings.map((warning) => <span key={warning}><AlertTriangle size={14} /> {warning}</span>)}
+                </div>
+              ) : null}
+              <div className="table-wrap mapping-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Uploaded column</th>
+                      <th>Mapped LeakProof field</th>
+                      <th>Confidence</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mappingDraft.field_mappings.map((mapping) => (
+                      <tr key={mapping.uploaded_column}>
+                        <td>{mapping.uploaded_column}</td>
+                        <td>
+                          <select
+                            value={mapping.mapped_field ?? ''}
+                            onChange={(event) => updateMappingField(mapping.uploaded_column, event.target.value)}
+                            aria-label={`Map ${mapping.uploaded_column}`}
+                          >
+                            <option value="">Do not import</option>
+                            {mappingTargetFields.map((field) => <option key={field} value={field}>{field}</option>)}
+                          </select>
+                        </td>
+                        <td>{mapping.mapped_field ? `${Math.round(mapping.confidence * 100)}%` : 'Unmapped'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {mappingRequiredMissingFields.length > 0 ? (
+                <div className="mapping-required-fields">
+                  <strong>Missing required fields</strong>
+                  <span>{mappingRequiredMissingFields.join(', ')}</span>
+                </div>
+              ) : (
+                <div className="mapping-required-fields ready">
+                  <CheckCircle2 size={16} />
+                  <span>Required fields are mapped. LeakProof will still validate every row before saving.</span>
+                </div>
+              )}
+              {(mappingPreview?.parse_preview.safe_preview ?? mappingDraft.safe_preview).length > 0 ? (
+                <div className="mapping-safe-preview">
+                  <strong>Safe preview</strong>
+                  {(mappingPreview?.parse_preview.safe_preview ?? mappingDraft.safe_preview).slice(0, 3).map((row, index) => (
+                    <p key={index}>{Object.entries(row).map(([field, value]) => `${field}: ${value}`).join(' | ')}</p>
+                  ))}
+                </div>
+              ) : null}
+              <div className="mapping-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    setMappingDraft(null);
+                    setMappingPreview(null);
+                  }}
+                >
+                  <XCircle size={16} /> Cancel mapping
+                </button>
+                <button
+                  type="button"
+                  disabled={mappingRequiredMissingFields.length > 0 || isPending}
+                  onClick={() => runTask(confirmCsvMappingAndUpload)}
+                >
+                  <ClipboardCheck size={16} /> Confirm mapping
+                </button>
+              </div>
+            </section>
+          ) : null}
+          {documents.length > 0 ? (
           <DataTable
-            columns={['Classification', 'File', 'Customer', 'Parse', 'Text', 'Embedding', 'Size', 'Uploaded', 'Action']}
+            columns={['File type detected', 'File', 'Parsing status', 'Mapping required', 'Customer match', 'Next step', 'Action']}
             rows={documents.map((document) => [
-              document.document_type,
-              document.file_name,
-              document.document_type === 'contract' ? formatCustomerLabel(document.customers, document.customer_id) : 'CSV row mapping',
-              document.parse_status,
-              document.extracted_text_status ?? document.chunking_status ?? 'pending',
-              document.embedding_status ?? 'pending',
-              `${Math.round(document.size_bytes / 1024)} KB`,
-              formatDate(document.created_at),
+              detectedFileTypeLabel(document),
+              <span className="stacked-text" key={`${document.id}-file`}>
+                <strong>{document.file_name}</strong>
+                <span>{`${Math.round(document.size_bytes / 1024)} KB uploaded ${formatDate(document.created_at)}`}</span>
+              </span>,
+              <span className="stacked-text" key={`${document.id}-parse`}>
+                <StatusBadge value={document.parse_status} tone={['error', 'failed'].includes(document.parse_status) ? 'danger' : document.parse_status === 'parsed' ? 'good' : 'warning'} />
+                <span>{document.extracted_text_status ?? document.chunking_status ?? 'pending'}</span>
+              </span>,
+              mappingStatusForDocument(document),
+              document.document_type === 'contract' ? formatCustomerLabel(document.customers, document.customer_id) : customerMappingStatusForDocument(document),
+              nextUploadStepForDocument(document),
               <button
                 key={document.id}
                 onClick={() => {
@@ -1779,6 +2403,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             ])}
             empty="No source documents uploaded yet."
           />
+          ) : null}
         </section>
         ) : null}
 
@@ -1798,6 +2423,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               <BarChartPanel points={groupLocalStatus(searchResults.map((result) => result.source_label.split(':')[0] ?? 'Source document'))} />
             </ChartCard>
           </section>
+          {pendingEvidenceCandidates.length === 0 && searchResults.length === 0 ? (
+            <EmptyState
+              title="No evidence queued yet"
+              detail="Search for contract clauses, invoice rows, usage rows, or calculation support, then attach candidates for human approval."
+              actionHref="/app/evidence"
+              actionLabel="Search evidence"
+            />
+          ) : null}
           <form
             className="upload-bar"
             onSubmit={(event) => {
@@ -1885,6 +2518,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               <Play size={16} /> Run extraction
             </button>
           </div>
+          {terms.length === 0 ? (
+            <EmptyState
+              title="No contract terms yet"
+              detail="Upload a contract and run extraction. A human still reviews every extracted term before code uses it."
+              actionHref="/app/uploads"
+              actionLabel="Upload contracts"
+            />
+          ) : (
           <DataTable
             columns={['Customer/account', 'Clause type', 'Extracted value', 'Approved value', 'Confidence', 'Source', 'Reviewer', 'Review status', 'Action']}
             rows={terms.map((term) => [
@@ -1922,6 +2563,131 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             ])}
             empty="No extracted terms yet."
           />
+          )}
+        </section>
+        ) : null}
+
+        {activeSection === 'contract-hierarchy' ? (
+        <section id="contract-hierarchy" className="workspace-section">
+          <SectionHeader icon={<Workflow size={18} />} title="Contract hierarchy" detail="AI suggests document precedence. Code keeps money deterministic, and reviewers decide which terms control." />
+          <section className="metric-grid compact-metrics">
+            <Metric label="Contract documents" value={String(hierarchyDocuments.length)} detail="For selected customer" />
+            <Metric label="Controlling terms" value={String(contractHierarchy?.resolution.controllingTerms.length ?? 0)} detail="Advisory recommendations" tone="good" />
+            <Metric label="Conflicts" value={String(hierarchyConflicts.length)} detail="Needs reviewer decision" tone={hierarchyConflicts.length > 0 ? 'warning' : 'good'} />
+            <Metric label="Unresolved items" value={String(hierarchyUnresolved.length)} detail="Blocks customer-ready confidence" tone={hierarchyUnresolved.length > 0 ? 'danger' : 'good'} />
+          </section>
+          <div className="action-row hierarchy-controls">
+            <label>
+              Customer account
+              <select
+                value={hierarchyCustomerId}
+                onChange={(event) => {
+                  setSelectedHierarchyCustomerId(event.target.value);
+                  setContractHierarchy(null);
+                }}
+                aria-label="Customer for contract hierarchy"
+              >
+                <option value="">Choose customer...</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}{customer.external_id ? ` (${customer.external_id})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={!hierarchyCustomerId || hierarchyDocuments.length === 0 || isPending}
+              onClick={() => runTask(resolveContractHierarchyForCustomer)}
+            >
+              <Workflow size={16} /> Resolve hierarchy
+            </button>
+          </div>
+          <div className="hierarchy-timeline">
+            {hierarchyDocuments.length === 0 ? (
+              <EmptyState title="No contract documents for this customer" detail="Assign MSA, order form, amendment, renewal, or pricing documents to the customer before resolving hierarchy." />
+            ) : hierarchyDocuments.map((document, index) => {
+              const role = roleForDocument(document, contractHierarchy?.resolution);
+              return (
+                <article key={document.id} className="hierarchy-node">
+                  <span>{index + 1}</span>
+                  <div>
+                    <strong>{labelize(role)}</strong>
+                    <p>{document.file_name}</p>
+                    <small>{formatDate(document.created_at)} / {termsForDocument(hierarchyTerms, document.id).length} term{termsForDocument(hierarchyTerms, document.id).length === 1 ? '' : 's'}</small>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          {contractHierarchy ? (
+            <section className="detail-card hierarchy-review-card">
+              <div className="mapping-review-header">
+                <div>
+                  <p className="eyebrow">Review required</p>
+                  <h3>{labelize(contractHierarchy.resolution.status)}</h3>
+                  <p className="muted">
+                    {contractHierarchy.relationships_inserted} relationship{contractHierarchy.relationships_inserted === 1 ? '' : 's'} saved. {contractHierarchy.terms_marked_needs_review} non-approved term{contractHierarchy.terms_marked_needs_review === 1 ? '' : 's'} marked needs review. Approved terms were left unchanged.
+                  </p>
+                </div>
+                <StatusBadge value="Advisory only" tone="muted" />
+              </div>
+              {contractHierarchy.resolution.warnings.length > 0 ? (
+                <div className="mapping-warning-list">
+                  {contractHierarchy.resolution.warnings.map((warning) => <span key={warning}><AlertTriangle size={14} /> {warning}</span>)}
+                </div>
+              ) : null}
+              <DataTable
+                columns={['Term type', 'Recommended controlling term', 'Document role', 'Superseded terms', 'Confidence', 'Review state']}
+                rows={contractHierarchy.resolution.controllingTerms.map((term) => [
+                  term.termType.replaceAll('_', ' '),
+                  termLabel(term.controllingTermId, hierarchyTerms),
+                  labelize(term.documentRole),
+                  term.supersededTermIds.length > 0 ? term.supersededTermIds.map((termId) => termLabel(termId, hierarchyTerms)).join(', ') : 'None',
+                  `${Math.round(term.confidence * 100)}%`,
+                  term.needsReview ? <StatusBadge key={`${term.termType}-review`} value="needs_review" /> : <StatusBadge key={`${term.termType}-clear`} value="reviewed" />
+                ])}
+                empty="Run hierarchy resolution to see controlling term recommendations."
+              />
+              <section className="detail-card-grid two-up">
+                <div className="detail-card">
+                  <h4>Conflicts</h4>
+                  {hierarchyConflicts.length === 0 ? (
+                    <p className="muted">No term conflicts returned.</p>
+                  ) : (
+                    <ul className="hierarchy-list">
+                      {hierarchyConflicts.map((conflict) => (
+                        <li key={`${conflict.termType}-${conflict.termIds.join('-')}`}>
+                          <strong>{conflict.termType.replaceAll('_', ' ')}</strong>
+                          <span>{conflict.reason}</span>
+                          <small>Review: {conflict.termIds.map((termId) => termLabel(termId, hierarchyTerms)).join(', ')}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="detail-card">
+                  <h4>Reviewer checklist</h4>
+                  <ul className="hierarchy-list">
+                    {contractHierarchy.resolution.reviewerChecklist.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </div>
+              </section>
+              {hierarchyUnresolved.length > 0 ? (
+                <DataTable
+                  columns={['Issue', 'Terms', 'Reviewer action']}
+                  rows={hierarchyUnresolved.map((item) => [
+                    labelize(item.kind),
+                    item.termIds.length > 0 ? item.termIds.map((termId) => termLabel(termId, hierarchyTerms)).join(', ') : 'Document-level issue',
+                    item.reviewerAction
+                  ])}
+                  empty="No unresolved hierarchy items."
+                />
+              ) : null}
+            </section>
+          ) : (
+            <EmptyState title="Hierarchy not resolved yet" detail="Run the resolver after extraction. It will classify documents and flag conflicts, but it will not approve or replace terms." />
+          )}
         </section>
         ) : null}
 
@@ -1939,6 +2705,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               ]} />
             </ChartCard>
           </section>
+          {invoices.length === 0 && usage.length === 0 ? (
+            <EmptyState
+              title="No billing or usage rows yet"
+              detail="Upload invoice and usage CSVs, confirm the mappings, and LeakProof will show normalized rows here."
+              actionHref="/app/uploads"
+              actionLabel="Upload invoices and usage"
+            />
+          ) : null}
           <div className="split-grid">
             <DataTable
               columns={['Invoice', 'Date', 'Line item', 'Amount']}
@@ -1957,9 +2731,11 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
         {activeSection === 'findings' ? (
         <section id="findings" className="workspace-section">
           <SectionHeader icon={<AlertTriangle size={18} />} title="Findings" detail="Every amount is calculated by deterministic code and must remain evidence-backed." />
+          <ReviewQueuePanel items={reviewQueue} currency={displayCurrency} />
           <section className="metric-grid compact-metrics">
             <Metric label="Total findings" value={String(findings.length)} detail="All workflow states" />
-            <Metric label="Total value" value={formatMoney(findings.reduce((sum, finding) => sum + finding.estimated_amount_minor, 0), displayCurrency)} detail="All workflow states" tone="danger" />
+            <Metric label="Customer-facing leakage" value={formatMoney(customerFacingTotalMinor, displayCurrency)} detail="Approved/customer-ready/recovered only" tone="danger" />
+            <Metric label="Internal exposure" value={formatMoney(internalPipelineTotalMinor, displayCurrency)} detail="Draft and needs-review only" tone="warning" />
             <Metric label="Recoverable amount" value={formatMoney(recoverableMinor, displayCurrency)} detail="Approved recoverable findings" tone="good" />
             <Metric label="Prevented amount" value={formatMoney(preventedMinor, displayCurrency)} detail="Approved prevention findings" tone="warning" />
             <Metric label="High priority" value={String(highPriorityFindings)} detail="Severity high or critical" tone="danger" />
@@ -1990,6 +2766,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               <Play size={16} /> Run reconciliation
             </button>
           </div>
+          {findings.length === 0 ? (
+            <EmptyState
+              title="No findings yet"
+              detail="Approve contract terms, upload invoice and usage data, then run reconciliation to create deterministic findings."
+              actionHref="/app/contracts"
+              actionLabel="Review terms"
+            />
+          ) : (
           <DataTable
             columns={['Finding title', 'Account/customer', 'Leakage category', 'Amount', 'Recoverable/prevented', 'Priority', 'Confidence', 'Status', 'Evidence', 'Last updated', 'Assigned reviewer', 'Action']}
             rows={findings.map((finding) => [
@@ -2028,16 +2812,27 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             ])}
             empty="No findings yet."
           />
+          )}
           {selectedFinding ? (
             <FindingDetailPanel
               finding={selectedFindingDetail?.finding ?? selectedFinding}
               evidence={selectedFindingDetail?.evidence ?? []}
               candidates={evidenceCandidates.filter((candidate) => candidate.finding_id === selectedFinding.id)}
               latestCritique={selectedFindingDetail?.latest_critique ?? null}
+              recoveryNoteDraft={recoveryNoteDrafts[selectedFinding.id] ?? null}
               onApproveCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'approve'))}
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
               onRunAiReview={() => runTask(() => runFindingAiReview(selectedFinding.id))}
+              onDraftRecoveryNote={() => runTask(() => draftRecoveryNote(selectedFinding.id))}
+              onCopyInternalNote={(text) => runTask(() => copyRecoveryNoteText(text, 'Internal note'))}
+              onCopyCustomerDraft={(text) => runTask(() => copyRecoveryNoteText(text, 'Customer draft'))}
+              onAddToReportDraft={(draft) => runTask(() => addRecoveryNoteToReportDraft(selectedFinding, draft))}
+              onFindMoreEvidence={() => {
+                setCandidateFindingId(selectedFinding.id);
+                setSearchQuery(selectedFinding.title);
+                router.push('/app/evidence');
+              }}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
               canMutateFindings={selectedOrgCanReviewFindings}
             />
@@ -2054,10 +2849,20 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               evidence={selectedFindingDetail?.evidence ?? []}
               candidates={evidenceCandidates.filter((candidate) => candidate.finding_id === selectedFinding.id)}
               latestCritique={selectedFindingDetail?.latest_critique ?? null}
+              recoveryNoteDraft={recoveryNoteDrafts[selectedFinding.id] ?? null}
               onApproveCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'approve'))}
               onRejectCandidate={(candidateId) => runTask(() => decideEvidenceCandidate(candidateId, 'reject'))}
               onRemoveEvidence={(evidenceItemId) => runTask(() => removeEvidenceItem(evidenceItemId))}
               onRunAiReview={() => runTask(() => runFindingAiReview(selectedFinding.id))}
+              onDraftRecoveryNote={() => runTask(() => draftRecoveryNote(selectedFinding.id))}
+              onCopyInternalNote={(text) => runTask(() => copyRecoveryNoteText(text, 'Internal note'))}
+              onCopyCustomerDraft={(text) => runTask(() => copyRecoveryNoteText(text, 'Customer draft'))}
+              onAddToReportDraft={(draft) => runTask(() => addRecoveryNoteToReportDraft(selectedFinding, draft))}
+              onFindMoreEvidence={() => {
+                setCandidateFindingId(selectedFinding.id);
+                setSearchQuery(selectedFinding.title);
+                router.push('/app/evidence');
+              }}
               onUpdateStatus={(status) => runTask(() => updateFindingStatus(selectedFinding.id, status))}
               canMutateFindings={selectedOrgCanReviewFindings}
             />
@@ -2076,6 +2881,14 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             <Metric label="Review burden" value={String(openFindings.length)} detail="Draft and needs-review findings" tone="warning" />
             <Metric label="Average review time" value={reviewBurdenAnalytics?.averageReviewTurnaroundHours === null || reviewBurdenAnalytics?.averageReviewTurnaroundHours === undefined ? 'Not enough data' : `${reviewBurdenAnalytics.averageReviewTurnaroundHours}h`} detail="Created to reviewed" />
           </section>
+          {!hasAnalyticsData ? (
+            <EmptyState
+              title="No analytics yet"
+              detail="Analytics appear after uploads, reviewed terms, deterministic reconciliation, and human-approved findings."
+              actionHref="/app/uploads"
+              actionLabel="Upload missing data"
+            />
+          ) : null}
           <section className="chart-grid">
             <ChartCard title="Leakage trend by month" scope="Customer-facing leakage"><TrendChartPanel data={customerFacingAnalytics?.trend ?? []} currency={displayCurrency} /></ChartCard>
             <ChartCard title="Leakage by account segment" scope="Customer-facing leakage"><BarChartPanel points={customerFacingAnalytics?.bySegment ?? []} currency={displayCurrency} /></ChartCard>
@@ -2096,6 +2909,12 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             <ChartCard title="Renewal calendar heatmap" scope="Internal pipeline"><HeatmapPanel points={operationsAnalytics?.renewalCalendar ?? []} /></ChartCard>
             <ChartCard title="Confidence distribution" scope="Needs finance review"><DonutChartPanel points={reviewBurdenAnalytics?.confidenceDistribution ?? []} currency={displayCurrency} /></ChartCard>
             <ChartCard title="Top 10 recurring leakage patterns" scope="Internal pipeline"><RankedList points={operationsAnalytics?.recurringPatterns ?? []} /></ChartCard>
+            <ChartCard title="Why leakage happened" scope="Customer-facing leakage"><BarChartPanel points={customerFacingRootCauses?.rootCausesByCount ?? []} /></ChartCard>
+            <ChartCard title="Root causes by leakage amount" scope="Customer-facing leakage"><BarChartPanel points={customerFacingRootCauses?.rootCausesByLeakageAmount ?? []} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Internal root-cause pipeline" scope="Internal pipeline"><BarChartPanel points={internalRootCauses?.rootCausesByLeakageAmount ?? []} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Prevention recommendations" scope="Needs finance review"><OperationalFixList fixes={rootCauseAnalytics?.topOperationalFixes ?? []} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Top recurring leakage patterns" scope="Internal pipeline"><RootCausePatternList patterns={rootCauseAnalytics?.recurringPatterns ?? []} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Recommended operational controls" scope="Internal pipeline"><OperationalControlList fixes={rootCauseAnalytics?.topOperationalFixes ?? []} /></ChartCard>
           </section>
         </section>
         ) : null}
@@ -2119,7 +2938,76 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
               { label: 'Recovered', value: recoveredMinor, amountMinor: recoveredMinor }
             ]} currency={displayCurrency} /></ChartCard>
             <ChartCard title="Status summary" scope="Needs finance review"><BarChartPanel points={reviewBurdenAnalytics?.allStatuses ?? []} /></ChartCard>
+            <ChartCard title="Why leakage happened" scope="Customer-facing leakage"><BarChartPanel points={customerFacingRootCauses?.rootCausesByLeakageAmount ?? []} currency={displayCurrency} /></ChartCard>
+            <ChartCard title="Prevention recommendations" scope="Needs finance review"><OperationalFixList fixes={rootCauseAnalytics?.topOperationalFixes ?? []} currency={displayCurrency} /></ChartCard>
           </section>
+          <section className="detail-card cfo-summary-card">
+            <div className="ai-review-header">
+              <div>
+                <h3>CFO narrative draft</h3>
+                <p className="muted">Separates customer-facing leakage, internal exposure, closed findings, and risk-only items. Human review is still required.</p>
+              </div>
+              <button className="secondary-button" onClick={() => runTask(draftCfoSummary)} disabled={isPending || !selectedOrgCanReviewFindings}>
+                <FileText size={16} /> Draft CFO summary
+              </button>
+            </div>
+            {cfoSummaryDraft ? (
+              <div className="cfo-summary-body">
+                <p>{cfoSummaryDraft.executiveSummary}</p>
+                <div className="detail-card-grid two-up">
+                  <article className="detail-card">
+                    <h4>Customer-facing leakage</h4>
+                    <p>{cfoSummaryDraft.totalApprovedLeakageText}</p>
+                  </article>
+                  <article className="detail-card">
+                    <h4>Internal exposure</h4>
+                    <p>{cfoSummaryDraft.internalExposureText}</p>
+                  </article>
+                </div>
+                <div className="detail-card-grid two-up">
+                  <article className="detail-card">
+                    <h4>Priority actions</h4>
+                    <ul className="compact-list">
+                      {cfoSummaryDraft.priorityActions.map((action) => <li key={action}>{action}</li>)}
+                    </ul>
+                  </article>
+                  <article className="detail-card">
+                    <h4>Report readiness</h4>
+                    <p>{cfoSummaryDraft.reportReadiness.narrative}</p>
+                    {cfoSummaryDraft.reportReadiness.blockers.length > 0 ? (
+                      <ul className="compact-list">
+                        {cfoSummaryDraft.reportReadiness.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}
+                      </ul>
+                    ) : null}
+                  </article>
+                </div>
+              </div>
+            ) : (
+              <p className="muted">Draft a CFO summary after generating or reviewing report readiness.</p>
+            )}
+          </section>
+          {reportDraftRecoveryNotes.length > 0 ? (
+            <section className="detail-card report-draft-notes-card">
+              <h3>Recovery notes added to report draft</h3>
+              <div className="evidence-mini-list">
+                {reportDraftRecoveryNotes.map((note) => (
+                  <article key={note.findingId}>
+                    <span>{formatDate(note.addedAt)}</span>
+                    <strong>{note.findingTitle}</strong>
+                    <p>{note.customerFacingDraft}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {approvedFindings.length === 0 && !report ? (
+            <EmptyState
+              title="No report-ready findings"
+              detail="Approve findings and their evidence first. Draft and needs-review exposure stays internal and cannot be exported."
+              actionHref="/app/findings"
+              actionLabel="Approve findings"
+            />
+          ) : null}
           <ExecutiveReportPreview
             report={report}
             reportPackId={reportPackId}
@@ -2372,6 +3260,75 @@ function RankedList({ points, currency }: { points: AnalyticsPoint[]; currency?:
   );
 }
 
+function OperationalFixList({
+  fixes,
+  currency
+}: {
+  fixes: RootCauseAnalyticsPayload['topOperationalFixes'];
+  currency: string;
+}) {
+  if (fixes.length === 0) {
+    return <EmptyState title="No prevention patterns yet" detail="Root-cause controls appear after findings are available in this workspace." compact />;
+  }
+
+  return (
+    <ol className="action-list">
+      {fixes.slice(0, 5).map((fix) => (
+        <li key={fix.rootCause}>
+          <strong>{fix.label}</strong>
+          <span>{fix.operationalOwnerSuggestion}</span>
+          <p>{fix.preventionRecommendation}</p>
+          <em>
+            {formatMoney(fix.customerFacingLeakageMinor, currency)} customer-facing / {formatMoney(fix.internalPipelineExposureMinor, currency)} internal
+          </em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function RootCausePatternList({
+  patterns,
+  currency
+}: {
+  patterns: RootCauseAnalyticsPayload['recurringPatterns'];
+  currency: string;
+}) {
+  if (patterns.length === 0) {
+    return <EmptyState title="No recurring root causes yet" detail="Recurring patterns appear after multiple findings have been classified." compact />;
+  }
+
+  return (
+    <ol className="ranked-list">
+      {patterns.slice(0, 10).map((pattern, index) => (
+        <li key={pattern.rootCause}>
+          <span>{index + 1}</span>
+          <strong>{pattern.label}</strong>
+          <em>{pattern.findingCount} / {formatMoney(pattern.customerFacingLeakageMinor, currency)}</em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function OperationalControlList({ fixes }: { fixes: RootCauseAnalyticsPayload['topOperationalFixes'] }) {
+  if (fixes.length === 0) {
+    return <EmptyState title="No controls recommended yet" detail="Controls appear after root-cause analytics identifies repeatable leakage patterns." compact />;
+  }
+
+  return (
+    <ol className="action-list">
+      {fixes.slice(0, 5).map((fix) => (
+        <li key={fix.rootCause}>
+          <strong>{fix.operationalOwnerSuggestion}</strong>
+          <span>{fix.label}</span>
+          <p>{fix.preventionRecommendation}</p>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function AccountRiskTable({ rows, currency }: { rows: AccountRiskRow[]; currency: string }) {
   if (rows.length === 0) {
     return <EmptyState title="No accounts at risk yet" detail="Approved findings with customer links will populate the ranked account view." compact />;
@@ -2459,6 +3416,153 @@ function EvidenceMiniList({ items, empty }: { items: EvidenceItemRow[]; empty: s
         </article>
       ))}
     </div>
+  );
+}
+
+function NextBestActionBanner({ action, queueCount }: { action: NextActionDisplay; queueCount: number }) {
+  return (
+    <section className="next-action-banner" aria-label="Recommended next action">
+      <div>
+        <span>Next best action</span>
+        <strong>{action.title}</strong>
+        <p>{action.explanation}</p>
+      </div>
+      <div className="next-action-meta">
+        <span>{queueCount} review item{queueCount === 1 ? '' : 's'}</span>
+        <Link className="button-link primary-action" href={action.deepLink}>
+          {action.ctaLabel} <ArrowRight size={16} />
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function GuidedHomeCard({
+  eyebrow,
+  title,
+  detail,
+  status,
+  actionHref,
+  actionLabel,
+  children
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  status: string;
+  actionHref: string;
+  actionLabel: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <article className="guided-home-card">
+      <div className="guided-home-card-header">
+        <span>{eyebrow}</span>
+        <StatusBadge value={status} tone={status === 'Ready' || status === 'Clear' || status === 'Customer-facing' ? 'good' : status === 'Blocked' || status === 'Needs finance review' ? 'warning' : 'muted'} />
+      </div>
+      <strong>{title}</strong>
+      <p>{detail}</p>
+      {children}
+      <Link href={actionHref}>{actionLabel} <ArrowRight size={14} /></Link>
+    </article>
+  );
+}
+
+function MiniFindingList({
+  findings,
+  currency,
+  empty
+}: {
+  findings: Array<{ id: string; title: string; estimated_amount_minor: number; currency?: string }>;
+  currency: string;
+  empty: string;
+}) {
+  if (findings.length === 0) return <p className="muted">{empty}</p>;
+
+  return (
+    <ol className="mini-work-list">
+      {findings.map((finding) => (
+        <li key={finding.id}>
+          <span>{finding.title}</span>
+          <em>{formatMoney(finding.estimated_amount_minor, finding.currency || currency)}</em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function MiniReviewQueue({ items, empty }: { items: ReviewQueueItem[]; empty: string }) {
+  if (items.length === 0) return <p className="muted">{empty}</p>;
+
+  return (
+    <ol className="mini-work-list">
+      {items.map((item) => (
+        <li key={item.id}>
+          <span>{reviewQueueKindLabel(item.kind)}</span>
+          <em>{item.amountMinor > 0 && item.currency ? formatMoney(item.amountMinor, item.currency) : item.priority}</em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function MiniBlockerList({ items, empty }: { items: Array<{ title: string; severity: string }>; empty: string }) {
+  if (items.length === 0) return <p className="muted">{empty}</p>;
+
+  return (
+    <ol className="mini-work-list">
+      {items.map((item) => (
+        <li key={`${item.severity}-${item.title}`}>
+          <span>{item.title}</span>
+          <em>{item.severity}</em>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function ReviewQueuePanel({ items, currency }: { items: ReviewQueueItem[]; currency: string }) {
+  return (
+    <section className="review-queue-panel">
+      <div className="review-queue-header">
+        <div>
+          <span>Review queue</span>
+          <h3>{items.length} item{items.length === 1 ? '' : 's'} need a human decision</h3>
+          <p>Sorted by amount impact, evidence strength, false-positive risk, age, and priority.</p>
+        </div>
+        <StatusBadge value={items.length > 0 ? 'Needs review' : 'Clear'} tone={items.length > 0 ? 'warning' : 'good'} />
+      </div>
+      {items.length === 0 ? (
+        <EmptyState
+          title="Review queue is clear"
+          detail="There are no pending terms, findings, evidence candidates, report blockers, low-confidence terms, or unassigned documents."
+          compact
+          actionHref="/app/reports"
+          actionLabel="Check report"
+        />
+      ) : (
+        <div className="review-queue-list">
+          {items.slice(0, 12).map((item) => (
+            <article key={item.id} className="review-queue-item">
+              <div>
+                <span>{reviewQueueKindLabel(item.kind)}</span>
+                <strong>{item.title}</strong>
+                <p>{item.detail}</p>
+              </div>
+              <div className="review-queue-metrics">
+                <em>{item.amountMinor > 0 && item.currency ? formatMoney(item.amountMinor, item.currency) : item.amountMinor > 0 ? formatMoney(item.amountMinor, currency) : 'No amount yet'}</em>
+                <small>{Math.round(item.evidenceStrength * 100)}% evidence strength</small>
+                <small>{Math.round(item.falsePositiveRisk * 100)}% false-positive risk</small>
+                <small>{item.ageDays}d old · {item.priority}</small>
+              </div>
+              <Link className="button-link secondary" href={item.actionHref}>
+                {item.actionLabel}
+              </Link>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -2578,10 +3682,16 @@ function FindingDetailPanel({
   evidence,
   candidates,
   latestCritique,
+  recoveryNoteDraft,
   onApproveCandidate,
   onRejectCandidate,
   onRemoveEvidence,
   onRunAiReview,
+  onDraftRecoveryNote,
+  onCopyInternalNote,
+  onCopyCustomerDraft,
+  onAddToReportDraft,
+  onFindMoreEvidence,
   onUpdateStatus,
   canMutateFindings
 }: {
@@ -2589,10 +3699,16 @@ function FindingDetailPanel({
   evidence: EvidenceItemRow[];
   candidates: EvidenceCandidateRow[];
   latestCritique: FindingAiCritiqueRow | null;
+  recoveryNoteDraft: RecoveryNoteDraft | null;
   onApproveCandidate: (candidateId: string) => void;
   onRejectCandidate: (candidateId: string) => void;
   onRemoveEvidence: (evidenceItemId: string) => void;
   onRunAiReview: () => void;
+  onDraftRecoveryNote: () => void;
+  onCopyInternalNote: (text: string) => void;
+  onCopyCustomerDraft: (text: string) => void;
+  onAddToReportDraft: (draft: RecoveryNoteDraft) => void;
+  onFindMoreEvidence: () => void;
   onUpdateStatus: (status: FindingStatusAction) => void;
   canMutateFindings: boolean;
 }) {
@@ -2629,12 +3745,29 @@ function FindingDetailPanel({
     'Can you confirm whether this adjustment matches your records?'
   ].join('\n');
   const critique = latestCritique?.critique_json;
-  const critiqueRisks = critique?.falsePositiveRisks?.filter((risk) => risk.risk) ?? [];
-  const critiqueChecklist = critique?.reviewerChecklist?.filter(Boolean) ?? [];
-  const critiqueGaps = critique?.evidenceQuality?.gaps?.filter(Boolean) ?? [];
-  const critiqueStrengths = critique?.evidenceQuality?.strengths?.filter(Boolean) ?? [];
-  const critiqueScore = latestCritique?.evidence_score ?? critique?.evidenceQuality?.score;
-  const critiqueRecommendation = latestCritique?.recommendation_status ?? critique?.recommendation;
+  const evidenceQualityReview = critique?.evidenceQuality ?? null;
+  const falsePositiveReview = critique?.falsePositive ?? null;
+  const legacyRisks = critique?.falsePositiveRisks?.filter((risk) => risk.risk) ?? [];
+  const critiqueRisks = falsePositiveReview?.riskReasons?.filter(Boolean) ?? legacyRisks.map((risk) => risk.risk).filter((risk): risk is string => Boolean(risk)) ?? [];
+  const critiqueChecklist = (
+    critique?.reviewerChecklist?.filter(Boolean) ??
+    evidenceQualityReview?.reviewerChecklist?.filter(Boolean) ??
+    falsePositiveReview?.suggestedChecks?.filter(Boolean) ??
+    []
+  );
+  const critiqueGaps = [
+    ...(evidenceQualityReview?.missingEvidence?.filter(Boolean) ?? evidenceQualityReview?.gaps?.filter(Boolean) ?? []),
+    ...(falsePositiveReview?.blockingIssues?.filter(Boolean) ?? [])
+  ];
+  const critiqueStrengths = evidenceQualityReview?.strengths?.filter(Boolean) ?? [];
+  const critiqueConflicts = evidenceQualityReview?.conflictingSignals?.filter(Boolean) ?? [];
+  const critiqueScore = latestCritique?.evidence_score ?? evidenceQualityReview?.score;
+  const critiqueRecommendation = critique?.recommendation ?? latestCritique?.recommendation_status ?? evidenceQualityReview?.recommendation;
+  const falsePositiveRiskLevel = falsePositiveReview?.riskLevel ?? legacyRisks[0]?.severity ?? 'low';
+  const shouldNotApproveYet =
+    ['high', 'critical'].includes(String(falsePositiveRiskLevel)) ||
+    evidenceQualityReview?.recommendation === 'do_not_approve_yet' ||
+    falsePositiveReview?.recommendation === 'do_not_approve_yet';
 
   return (
     <div className="detail-panel">
@@ -2659,20 +3792,30 @@ function FindingDetailPanel({
         <span>Evidence: {evidence.length} approved / {candidates.length} candidate</span>
       </div>
 
-      <section className="detail-card-grid">
+      <section className="detail-card-grid four-up">
         <article className="detail-card">
-          <h4>Executive summary</h4>
+          <h4>What happened</h4>
           <p>{finding.detailed_explanation ?? finding.summary}</p>
         </article>
-        <article className="detail-card formula-card">
-          <h4>Calculation formula</h4>
-          <FormulaBlock
-            formula={formula}
-            detail="Money values are calculated in deterministic code after extracted terms are reviewed."
-          />
+        <article className="detail-card">
+          <h4>Why it matters</h4>
+          <p>
+            This item involves {formatMoney(finding.estimated_amount_minor, finding.currency)} in deterministic audit output.
+            It stays internal until a human reviewer approves the finding and evidence.
+          </p>
         </article>
         <article className="detail-card">
-          <h4>Recommended action</h4>
+          <h4>What to check</h4>
+          {uncertaintyNotes.length === 0 ? (
+            <p>Check the contract clause, invoice or usage support, formula inputs, and customer impact before changing status.</p>
+          ) : (
+            <ul className="compact-list">
+              {uncertaintyNotes.slice(0, 3).map((note) => <li key={note}>{note}</li>)}
+            </ul>
+          )}
+        </article>
+        <article className="detail-card">
+          <h4>Recommended next step</h4>
           <p>{finding.recommended_action ?? 'Review supporting evidence and decide whether this should become customer-ready.'}</p>
         </article>
       </section>
@@ -2699,30 +3842,49 @@ function FindingDetailPanel({
       <section className="detail-card ai-review-card">
         <div className="ai-review-header">
           <div>
-            <h4>AI evidence review</h4>
-            <p>Advisory critique only. It cannot approve findings, change status, or change the amount.</p>
+            <h4>AI evidence and false-positive review</h4>
+            <p>Advisory critique only. It cannot approve evidence, change status, change amounts, or mark this customer-ready.</p>
           </div>
-          <button className="secondary-button" disabled={!canMutateFindings} onClick={onRunAiReview}>
-            <Bot size={16} /> Run AI review
-          </button>
+          <div className="button-group">
+            <button className="secondary-button" type="button" onClick={onFindMoreEvidence}>
+              <Search size={16} /> Find more evidence
+            </button>
+            <button className="secondary-button" disabled={!canMutateFindings} onClick={onRunAiReview}>
+              <Bot size={16} /> Run AI review
+            </button>
+          </div>
         </div>
         {latestCritique ? (
           <>
+            {shouldNotApproveYet ? (
+              <div className="ai-review-warning">
+                <AlertTriangle size={18} />
+                <span>Do not approve yet. Resolve the high-risk or conflicting evidence checks first.</span>
+              </div>
+            ) : null}
             <div className="ai-review-grid">
               <div>
-                <span>Evidence quality</span>
+                <span>Evidence quality card</span>
                 <strong>{typeof critiqueScore === 'number' ? `${critiqueScore}/100` : 'Not scored'}</strong>
-                <p>{critique?.evidenceQuality?.summary ?? 'No summary returned.'}</p>
+                <p>
+                  {evidenceQualityReview?.quality
+                    ? labelize(evidenceQualityReview.quality)
+                    : evidenceQualityReview?.summary ?? 'No evidence quality result returned.'}
+                </p>
+                <small>
+                  Contract {evidenceQualityReview?.contractEvidencePresent ? 'present' : 'missing'} · Invoice/usage {evidenceQualityReview?.invoiceOrUsageEvidencePresent ? 'present' : 'missing'} · Formula {evidenceQualityReview?.formulaSupported ? 'supported' : 'needs review'}
+                </small>
               </div>
               <div>
-                <span>AI recommendation</span>
+                <span>False-positive risk card</span>
+                <strong>{labelize(falsePositiveRiskLevel)}</strong>
+                <p>{falsePositiveReview?.riskReasons?.[0] ?? legacyRisks[0]?.risk ?? 'No false-positive risk reason returned.'}</p>
+                <small>{falsePositiveReview?.blockingIssues?.length ?? 0} blocking issue(s)</small>
+              </div>
+              <div>
+                <span>Reviewer recommendation</span>
                 <strong>{labelize(critiqueRecommendation ?? 'needs_more_evidence')}</strong>
-                <p>{critique?.recommendationRationale ?? 'Review the evidence and calculation before changing any status.'}</p>
-              </div>
-              <div>
-                <span>Safety boundary</span>
-                <strong>Human approval required</strong>
-                <p>Amount and status stay controlled by deterministic code and reviewer actions.</p>
+                <p>Human reviewer still controls evidence approval, finding status, customer-ready state, and exports.</p>
               </div>
             </div>
             <div className="detail-card-grid three-up ai-review-lists">
@@ -2733,9 +3895,9 @@ function FindingDetailPanel({
                 ) : (
                   <ul className="compact-list">
                     {critiqueRisks.map((risk, index) => (
-                      <li key={`${risk.risk}-${index}`}>
-                        <strong>{labelize(risk.severity ?? 'risk')}</strong> {risk.risk}
-                        {risk.reviewerAction ? <span>{risk.reviewerAction}</span> : null}
+                      <li key={`${risk}-${index}`}>
+                        <strong>{labelize(String(falsePositiveRiskLevel))}</strong> {risk}
+                        {legacyRisks[index]?.reviewerAction ? <span>{legacyRisks[index].reviewerAction}</span> : null}
                       </li>
                     ))}
                   </ul>
@@ -2752,12 +3914,12 @@ function FindingDetailPanel({
                 )}
               </div>
               <div>
-                <h4>Evidence notes</h4>
-                {[...critiqueStrengths, ...critiqueGaps].length === 0 ? (
+                <h4>Evidence gaps and conflicts</h4>
+                {[...critiqueStrengths, ...critiqueGaps, ...critiqueConflicts].length === 0 ? (
                   <p className="muted">No evidence notes were returned.</p>
                 ) : (
                   <ul className="compact-list">
-                    {[...critiqueStrengths, ...critiqueGaps].slice(0, 8).map((item) => <li key={item}>{item}</li>)}
+                    {[...critiqueStrengths, ...critiqueGaps, ...critiqueConflicts].slice(0, 8).map((item) => <li key={item}>{item}</li>)}
                   </ul>
                 )}
               </div>
@@ -2768,6 +3930,83 @@ function FindingDetailPanel({
           <p className="muted">No AI evidence review has been saved yet. Run it after approving the evidence snippets a human wants the model to critique.</p>
         )}
       </section>
+
+      <section className="detail-card recovery-note-card">
+        <div className="ai-review-header">
+          <div>
+            <h4>Recovery note draft</h4>
+            <p>Drafts are for human review only. The app does not send messages, create invoices, or export reports from this action.</p>
+          </div>
+          <button className="secondary-button" disabled={!canMutateFindings} onClick={onDraftRecoveryNote}>
+            <FileText size={16} /> Draft recovery note
+          </button>
+        </div>
+        {recoveryNoteDraft ? (
+          <>
+            <div className="detail-card-grid two-up">
+              <article className="detail-card">
+                <h4>Internal note</h4>
+                <pre className="note-block">{recoveryNoteDraft.internalNote}</pre>
+                <button className="secondary-button" onClick={() => onCopyInternalNote(recoveryNoteDraft.internalNote)}>
+                  <ClipboardCheck size={16} /> Copy internal note
+                </button>
+              </article>
+              <article className="detail-card">
+                <h4>Customer draft</h4>
+                {recoveryNoteDraft.customerFacingDraft ? (
+                  <>
+                    <pre className="note-block">{recoveryNoteDraft.customerFacingDraft}</pre>
+                    <div className="button-group">
+                      <button className="secondary-button" onClick={() => onCopyCustomerDraft(recoveryNoteDraft.customerFacingDraft ?? '')}>
+                        <ClipboardCheck size={16} /> Copy customer draft
+                      </button>
+                      <button
+                        className="secondary-button"
+                        disabled={!isCustomerFacingFindingStatus(finding.status)}
+                        onClick={() => onAddToReportDraft(recoveryNoteDraft)}
+                      >
+                        <Plus size={16} /> Add to report draft
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted">Customer-facing draft is blocked until the finding and approved evidence are ready.</p>
+                )}
+              </article>
+            </div>
+            <div className="detail-card-grid two-up">
+              <article className="detail-card">
+                <h4>Evidence summary</h4>
+                <p>{recoveryNoteDraft.evidenceSummary}</p>
+              </article>
+              <article className="detail-card">
+                <h4>Calculation summary</h4>
+                <p>{recoveryNoteDraft.calculationSummary}</p>
+              </article>
+            </div>
+            {recoveryNoteDraft.warnings.length > 0 ? (
+              <ul className="compact-list">
+                {recoveryNoteDraft.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            ) : null}
+          </>
+        ) : (
+          <p className="muted">Draft a recovery note after reviewing the finding amount and approved evidence.</p>
+        )}
+      </section>
+
+      <details className="advanced-review-details">
+        <summary>
+          <span>Advanced review details</span>
+          <strong>Formula, citations, raw inputs, and audit trail</strong>
+        </summary>
+        <article className="detail-card formula-card">
+          <h4>How we calculated it</h4>
+          <FormulaBlock
+            formula={formula}
+            detail="Money values are calculated in deterministic code after extracted terms are reviewed."
+          />
+        </article>
 
       <div className="split-grid">
         <div className="detail-card">
@@ -2860,6 +4099,7 @@ function FindingDetailPanel({
           <pre className="note-block">{draftCustomerNote}</pre>
         </article>
       </section>
+      </details>
     </div>
   );
 }
@@ -2875,6 +4115,248 @@ function SetupBlock({ title, detail, actionHref, actionLabel }: { title: string;
       </div>
     </main>
   );
+}
+
+function buildFallbackNextBestAction({
+  documents,
+  terms,
+  findings,
+  evidenceCandidates,
+  reportPackId
+}: {
+  documents: SourceDocument[];
+  terms: ContractTermRow[];
+  findings: FindingRow[];
+  evidenceCandidates: EvidenceCandidateRow[];
+  reportPackId: string;
+}): NextActionDisplay {
+  const hasContract = documents.some((document) => document.document_type === 'contract');
+  const hasInvoice = documents.some((document) => document.document_type === 'invoice_csv');
+  const hasUsage = documents.some((document) => document.document_type === 'usage_csv');
+  const hasApprovedTerms = terms.some((term) => ['approved', 'edited'].includes(term.review_status));
+  const hasOpenTerms = terms.some((term) => ['extracted', 'needs_review'].includes(term.review_status) || term.confidence < 0.75);
+  const hasOpenFindings = findings.some((finding) => ['draft', 'needs_review'].includes(finding.status));
+  const hasPendingEvidence = evidenceCandidates.some((candidate) => ['suggested', 'pending', 'needs_review'].includes(candidate.approval_state));
+  const hasReportSafeFindings = findings.some((finding) => isCustomerFacingFindingStatus(finding.status));
+
+  if (!hasContract) {
+    return {
+      title: 'Upload contracts',
+      explanation: 'Start with signed contracts or order forms so LeakProof can extract commercial terms.',
+      ctaLabel: 'Upload missing data',
+      deepLink: '/app/uploads'
+    };
+  }
+  if (!hasInvoice || !hasUsage) {
+    return {
+      title: 'Upload invoices and usage',
+      explanation: 'Code needs billed amounts and usage or seat counts before reconciliation can calculate leakage.',
+      ctaLabel: 'Upload missing data',
+      deepLink: '/app/uploads'
+    };
+  }
+  if (terms.length === 0 || hasOpenTerms) {
+    return {
+      title: 'Review contract terms',
+      explanation: 'Approve or edit supported terms before deterministic reconciliation uses them.',
+      ctaLabel: 'Review terms',
+      deepLink: '/app/contracts'
+    };
+  }
+  if (!hasApprovedTerms || findings.length === 0) {
+    return {
+      title: 'Run reconciliation',
+      explanation: 'Approved terms and source records are ready for deterministic comparison.',
+      ctaLabel: 'Run reconciliation',
+      deepLink: '/app/findings'
+    };
+  }
+  if (hasPendingEvidence) {
+    return {
+      title: 'Attach evidence',
+      explanation: 'Suggested evidence needs a human approval decision before report use.',
+      ctaLabel: 'Attach evidence',
+      deepLink: '/app/evidence'
+    };
+  }
+  if (hasOpenFindings) {
+    return {
+      title: 'Approve findings',
+      explanation: 'A human reviewer must approve, dismiss, or mark findings customer-ready.',
+      ctaLabel: 'Approve findings',
+      deepLink: '/app/findings'
+    };
+  }
+  if (hasReportSafeFindings && !reportPackId) {
+    return {
+      title: 'Generate report',
+      explanation: 'Report-safe findings are available for a human-reviewed customer-facing report draft.',
+      ctaLabel: 'Generate report',
+      deepLink: '/app/reports'
+    };
+  }
+  return {
+    title: 'Draft recovery note',
+    explanation: 'Use the approved report output to draft human-reviewed recovery language.',
+    ctaLabel: 'Draft recovery note',
+    deepLink: '/app/reports'
+  };
+}
+
+function buildUploadGuidanceCards({
+  documents,
+  invoices,
+  usage,
+  terms,
+  mappingDraft
+}: {
+  documents: SourceDocument[];
+  invoices: InvoiceRow[];
+  usage: UsageRow[];
+  terms: ContractTermRow[];
+  mappingDraft: UploadMappingDraft | null;
+}): UploadGuidanceCard[] {
+  const contracts = documents.filter((document) => document.document_type === 'contract');
+  const invoiceDocs = documents.filter((document) => document.document_type === 'invoice_csv');
+  const usageDocs = documents.filter((document) => document.document_type === 'usage_csv');
+  const customerDocs = documents.filter((document) => document.document_type === 'customer_csv');
+  const unassignedContracts = contracts.filter((document) => !document.customer_id);
+  const contractStatus = contracts.length === 0
+    ? 'Missing'
+    : unassignedContracts.length > 0
+      ? 'Needs customer match'
+      : terms.length > 0
+        ? 'Ready'
+        : 'Needs extraction';
+
+  return [
+    {
+      title: 'Contracts',
+      detail: 'Signed contracts, order forms, and amendments.',
+      count: contracts.length,
+      status: contractStatus,
+      nextStep: contracts.length === 0 ? 'Upload contracts' : unassignedContracts.length > 0 ? 'Match customers' : terms.length > 0 ? 'Review terms' : 'Run extraction',
+      actionHref: contracts.length === 0 ? '/app/uploads' : '/app/contracts'
+    },
+    {
+      title: 'Invoices',
+      detail: 'Billing exports with invoice dates, line items, amounts, and service periods.',
+      count: invoices.length || invoiceDocs.length,
+      status: mappingDraft?.documentType === 'invoice_csv' || (invoiceDocs.length > 0 && invoices.length === 0) ? 'Needs mapping' : invoices.length > 0 ? 'Ready' : 'Missing',
+      nextStep: invoices.length > 0 ? 'Review rows' : 'Upload invoices',
+      actionHref: invoices.length > 0 ? '/app/revenue-records' : '/app/uploads'
+    },
+    {
+      title: 'Usage / Seats',
+      detail: 'Usage, seat, allowance, or product consumption exports.',
+      count: usage.length || usageDocs.length,
+      status: mappingDraft?.documentType === 'usage_csv' || (usageDocs.length > 0 && usage.length === 0) ? 'Needs mapping' : usage.length > 0 ? 'Ready' : 'Missing',
+      nextStep: usage.length > 0 ? 'Review rows' : 'Upload usage',
+      actionHref: usage.length > 0 ? '/app/revenue-records' : '/app/uploads'
+    },
+    {
+      title: 'Customer list optional',
+      detail: 'Optional account list for cleaner customer matching and segment analytics.',
+      count: customerDocs.length,
+      status: customerDocs.length > 0 ? 'Ready' : 'Optional',
+      nextStep: customerDocs.length > 0 ? 'Review uploads' : 'Upload if available',
+      actionHref: '/app/uploads'
+    }
+  ];
+}
+
+function detectedFileTypeLabel(document: SourceDocument): string {
+  if (document.document_type === 'contract') return 'Contract';
+  if (document.document_type === 'invoice_csv') return 'Invoice CSV';
+  if (document.document_type === 'usage_csv') return 'Usage / seats CSV';
+  if (document.document_type === 'customer_csv') return 'Customer list CSV';
+  return labelize(document.document_type);
+}
+
+function mappingStatusForDocument(document: SourceDocument): string {
+  if (document.document_type === 'contract') return 'Not needed';
+  if (document.parse_status === 'parsed') return 'Confirmed';
+  if (['error', 'failed'].includes(document.parse_status)) return 'Fix mapping';
+  return 'Needs mapping';
+}
+
+function customerMappingStatusForDocument(document: SourceDocument): string {
+  if (document.document_type === 'customer_csv') return 'Provides customer matching';
+  if (document.parse_status === 'parsed') return 'Matched from CSV fields';
+  return 'Customer matching required';
+}
+
+function nextUploadStepForDocument(document: SourceDocument): string {
+  if (['error', 'failed'].includes(document.parse_status)) return 'Fix file or mapping';
+  if (document.document_type === 'contract' && !document.customer_id) return 'Match customer';
+  if (document.document_type !== 'contract' && document.parse_status !== 'parsed') return 'Confirm mapping';
+  if (document.embedding_status !== 'embedded') return 'Embed for evidence';
+  return 'Ready for review';
+}
+
+function isDataMappingDocumentType(value: UploadDocumentType): value is DataMappingDocumentType {
+  return value === 'invoice_csv' || value === 'usage_csv' || value === 'customer_csv';
+}
+
+function missingDataMappingFields(
+  documentType: DataMappingDocumentType,
+  mappings: readonly DataMappingFieldMapping[]
+): DataMappingTargetField[] {
+  const mapped = new Set(mappings.map((mapping) => mapping.mapped_field).filter(Boolean));
+  return requiredDataMappingFieldsByDocumentType[documentType].filter((field) => !mapped.has(field));
+}
+
+function parseCsvSampleForMapping(csv: string): { headers: string[]; sampleRows: Array<Record<string, string>> } {
+  const lines = csv.trim().split(/\r?\n/).filter(Boolean).slice(0, 6);
+  if (lines.length < 2) {
+    throw new Error('CSV must include a header row and at least one data row before AI mapping can run.');
+  }
+  const headers = splitCsvSampleLine(lines[0] ?? '').map((header) => header.trim()).filter(Boolean);
+  if (headers.length === 0) {
+    throw new Error('CSV headers could not be read.');
+  }
+  const sampleRows = lines.slice(1).map((line) => {
+    const values = splitCsvSampleLine(line);
+    return Object.fromEntries(headers.map((header, index) => [header, redactCsvCellForMappingRequest(values[index] ?? '')]));
+  });
+  return { headers, sampleRows };
+}
+
+function splitCsvSampleLine(line: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    const next = line[index + 1];
+
+    if (char === '"' && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      values.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(current);
+  return values;
+}
+
+function redactCsvCellForMappingRequest(value: string): string {
+  const text = value.trim();
+  if (!text) return 'blank';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text) || /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(text)) return 'date';
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) return 'email';
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(text) && !/^\d/.test(text)) return 'domain';
+  if (/^\$?\s*-?\d[\d,]*(\.\d{1,2})?$/.test(text)) return text.includes('$') || text.includes(',') || text.includes('.') ? 'money' : 'number';
+  if (/^[A-Z]{3}$/i.test(text)) return 'currency';
+  return `text:${Math.min(text.length, 120)}`;
 }
 
 async function apiFetch<T = unknown>(session: Session, path: string, init: RequestInit = {}): Promise<T> {
@@ -2909,6 +4391,47 @@ function labelize(value: string): string {
   return value
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function roleForDocument(document: SourceDocument, resolution?: ContractHierarchyResolution | null): ContractDocumentRole {
+  const resolved = resolution?.documentRoles.find((role) => role.sourceDocumentId === document.id)?.role;
+  if (resolved) return resolved;
+
+  const normalized = document.file_name.toLowerCase();
+  if (/renewal|extension order|renew order/.test(normalized)) return 'renewal_order';
+  if (/amend|addendum|change order/.test(normalized)) return 'amendment';
+  if (/side letter/.test(normalized)) return 'side_letter';
+  if (/statement of work|\bsow\b/.test(normalized)) return 'statement_of_work';
+  if (/pricing schedule|price schedule|rate card/.test(normalized)) return 'pricing_schedule';
+  if (/discount|promo|promotion|approval/.test(normalized)) return 'discount_approval';
+  if (/order form|subscription order/.test(normalized)) return 'order_form';
+  if (/master|msa|services agreement/.test(normalized)) return 'master_agreement';
+  return 'unknown';
+}
+
+function roleSortOrder(role: ContractDocumentRole): number {
+  const order: Record<ContractDocumentRole, number> = {
+    master_agreement: 1,
+    order_form: 2,
+    statement_of_work: 3,
+    pricing_schedule: 4,
+    side_letter: 5,
+    renewal_order: 6,
+    discount_approval: 7,
+    amendment: 8,
+    unknown: 9
+  };
+  return order[role];
+}
+
+function termsForDocument(terms: ContractTermRow[], sourceDocumentId: string): ContractTermRow[] {
+  return terms.filter((term) => term.source_document_id === sourceDocumentId);
+}
+
+function termLabel(termId: string, terms: ContractTermRow[]): string {
+  const term = terms.find((item) => item.id === termId);
+  if (!term) return shortId(termId);
+  return `${term.term_type.replaceAll('_', ' ')} ${shortId(term.id)}`;
 }
 
 function previewValue(value: unknown): string {

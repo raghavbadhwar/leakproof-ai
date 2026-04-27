@@ -7,13 +7,24 @@ export type CopilotToolName =
   | 'getFindingDetail'
   | 'checkReportReadiness'
   | 'detectMissingData'
+  | 'dataMappingAssistant'
+  | 'missingDataDetector'
+  | 'auditReadinessScore'
+  | 'nextBestAction'
   | 'prepareCfoSummaryData'
   | 'explainFindingFormulaDeterministic'
   | 'evidenceQualityReview'
+  | 'evidenceQualityScorer'
   | 'falsePositiveRiskCheck'
+  | 'falsePositiveCritic'
   | 'reviewerChecklist'
   | 'prepareCfoSummary'
-  | 'prepareRecoveryNote';
+  | 'cfoSummaryGenerator'
+  | 'prepareRecoveryNote'
+  | 'recoveryNoteGenerator'
+  | 'contractHierarchyResolver'
+  | 'rootCauseClassifier'
+  | 'preventionRecommendations';
 
 export type CopilotAnswerType =
   | 'audit_summary'
@@ -22,10 +33,16 @@ export type CopilotAnswerType =
   | 'evidence_review'
   | 'report_readiness'
   | 'missing_data'
+  | 'data_mapping'
+  | 'audit_readiness'
+  | 'next_best_action'
   | 'false_positive_risk'
   | 'reviewer_checklist'
   | 'cfo_summary'
-  | 'recovery_note';
+  | 'recovery_note'
+  | 'contract_hierarchy'
+  | 'root_cause'
+  | 'prevention_recommendations';
 
 export type CopilotSuggestedAction = {
   label: string;
@@ -43,7 +60,8 @@ export type CopilotActionType =
   | 'prepare_update_finding_status'
   | 'prepare_approve_evidence'
   | 'prepare_assign_reviewer'
-  | 'prepare_recovery_note';
+  | 'prepare_recovery_note'
+  | 'prepare_contract_hierarchy_resolution';
 
 export type CopilotActionStatus =
   | 'pending'

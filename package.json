@@ -10,7 +10,7 @@
     "env:check": "node scripts/env-check.mjs",
     "production:readiness": "node scripts/production-readiness.mjs",
     "production:gate": "pnpm env:check && pnpm test && pnpm typecheck && pnpm lint && pnpm build",
-    "lint": "eslint .",
+    "lint": "pnpm exec eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run --exclude '**/*.integration.test.ts'",

@@ -2,16 +2,25 @@
 
 ## Repo-Side Status
 
-The local repository is production-shaped, repo-side ready, and a pre-production candidate. Do not call production complete until live Supabase, Gemini, Vercel, deployed smoke, mock-audit, and role QA checks pass.
+The local repository is production-shaped, repo-side ready, and a pre-production candidate.
+
+Current posture:
+
+- Repo-side gates passed.
+- Verdict: pilot-ready after live setup.
+- Production status: not production-ready until live verification passes.
+
+Do not call production complete until live Supabase, Gemini, Vercel, deployed smoke, mock-audit, audit-log inspection, and owner/admin/reviewer/member/viewer role QA checks pass.
 
 LeakProof Copilot is now implemented through the final local hardening gate as a right-side assistant and command layer over the existing audit workspace. It can answer read-only workspace/finding/report questions from scoped tools, provide Gemini-assisted explanations with schema validation and deterministic fallback, prepare action cards, execute supported confirmed workflows through existing guarded routes/helpers, and provide advisory finding intelligence. It remains bounded by the product rule: LLM explains and suggests, code calculates, human approves.
 
 Current release checks to run before handoff:
 
+- Follow `docs/LIVE_PILOT_READINESS_RUNBOOK.md`.
 - `pnpm production:gate` with real production env values.
 - `APP_URL=<production-url> pnpm smoke` after deployment.
 - Mock audit against `sample-data/mock-pilot`, with expected total `USD 26,690`.
-- Owner/admin/reviewer/viewer browser QA against real Supabase Auth.
+- Owner/admin/reviewer/member/viewer browser QA against real Supabase Auth.
 - Copilot browser QA for read-only answers, action cards, confirmation/cancellation/execution, and finding intelligence prompts.
 
 ## External Blockers
@@ -21,14 +30,16 @@ Current release checks to run before handoff:
 Live production completion requires:
 
 1. Dedicated Supabase project.
-2. Supabase migration applied.
+2. Supabase migrations applied and verified.
 3. Supabase Auth configured.
 4. Gemini key and model env vars configured server-side.
 5. Vercel project linked.
 6. Vercel env vars configured.
-7. Live owner/admin/reviewer/viewer workflow verification.
+7. Live owner/admin/reviewer/member/viewer workflow verification.
 8. Deployed smoke test.
 9. Mock audit verification that the customer-facing total is `USD 26,690`.
+10. Live Gemini smoke against mock data.
+11. Audit-log and assistant-log inspection.
 
 ## Completed Production Gaps
 
@@ -72,4 +83,4 @@ Do not add unless explicitly requested:
 5. Deploy to Vercel.
 6. Run `NEXT_PUBLIC_APP_URL=<production-url> pnpm smoke`.
 7. Run the mock audit and confirm `USD 26,690`.
-8. Perform the manual role, workflow, and Copilot checks in `docs/QA_RUNBOOK.md` and `docs/SECURITY_REVIEW.md`.
+8. Perform the manual role, workflow, Copilot, Gemini, and audit-log checks in `docs/LIVE_PILOT_READINESS_RUNBOOK.md`.

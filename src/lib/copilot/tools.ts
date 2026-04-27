@@ -3,7 +3,10 @@ import {
   isCustomerFacingFindingStatus,
   isInternalPipelineFindingStatus
 } from '../analytics/workspaceAnalytics';
+import { buildRootCauseAnalytics } from '../analytics/rootCauseAnalytics';
+import { auditReadinessPayloadSchema, buildAuditReadinessFromCopilotContext } from '../ai/auditReadiness';
 import { customerFacingFindingStatuses } from '../analytics/statuses';
+import { classifyRootCauseDeterministic } from '../ai/rootCause';
 import { exportBlockerForFinding } from '../evidence/exportReadiness';
 import {
   evidenceQualityReview,
@@ -15,11 +18,14 @@ import {
 import {
   getFindingDetailInputSchema,
   getFindingsInputSchema,
+  optionalFindingInputSchema,
   copilotToolBaseInputSchema,
+  copilotFeatureIntegrationSchema,
   type CopilotToolBaseInput,
   type CopilotToolName,
   type GetFindingDetailInput,
-  type GetFindingsInput
+  type GetFindingsInput,
+  type OptionalFindingInput
 } from './schema';
 import {
   safeCustomerLabel,
@@ -44,13 +50,24 @@ export const READ_ONLY_COPILOT_TOOL_NAMES = [
   'getFindingDetail',
   'checkReportReadiness',
   'detectMissingData',
+  'dataMappingAssistant',
+  'missingDataDetector',
+  'auditReadinessScore',
+  'nextBestAction',
   'prepareCfoSummaryData',
   'explainFindingFormulaDeterministic',
   'evidenceQualityReview',
+  'evidenceQualityScorer',
   'falsePositiveRiskCheck',
+  'falsePositiveCritic',
   'reviewerChecklist',
   'prepareCfoSummary',
-  'prepareRecoveryNote'
+  'cfoSummaryGenerator',
+  'prepareRecoveryNote',
+  'recoveryNoteGenerator',
+  'contractHierarchyResolver',
+  'rootCauseClassifier',
+  'preventionRecommendations'
 ] as const satisfies readonly CopilotToolName[];
 
 export type RoutedCopilotToolCall = {
@@ -78,12 +95,16 @@ export function routeCopilotTools(input: {
   };
   const normalized = input.message.toLowerCase();
 
+  if (/\b(map|mapping|match|column|csv)\b.*\b(csv|columns?|headers?|uploaded)\b|\bmap this csv\b/.test(normalized)) {
+    return [{ toolName: 'dataMappingAssistant', input: baseInput }];
+  }
+
   if (/\b(evidence quality|score evidence|quality.*evidence|weak evidence|conflicting evidence)\b/.test(normalized) && input.selectedFindingId) {
-    return [{ toolName: 'evidenceQualityReview', input: { ...baseInput, finding_id: input.selectedFindingId } }];
+    return [{ toolName: 'evidenceQualityScorer', input: { ...baseInput, finding_id: input.selectedFindingId } }];
   }
 
   if (/\b(false[- ]?positive|false positive|risk check|critic|challenge)\b/.test(normalized) && input.selectedFindingId) {
-    return [{ toolName: 'falsePositiveRiskCheck', input: { ...baseInput, finding_id: input.selectedFindingId } }];
+    return [{ toolName: 'falsePositiveCritic', input: { ...baseInput, finding_id: input.selectedFindingId } }];
   }
 
   if (/\b(reviewer checklist|review checklist|checklist|before approving|before approval)\b/.test(normalized) && input.selectedFindingId) {
@@ -91,11 +112,23 @@ export function routeCopilotTools(input: {
   }
 
   if (/\b(recovery note|customer note|recovery draft|draft.*recovery|draft.*note)\b/.test(normalized) && input.selectedFindingId) {
-    return [{ toolName: 'prepareRecoveryNote', input: { ...baseInput, finding_id: input.selectedFindingId } }];
+    return [{ toolName: 'recoveryNoteGenerator', input: { ...baseInput, finding_id: input.selectedFindingId } }];
+  }
+
+  if (/\b(resolve|contract|hierarchy|amendment|msa|order form|side letter)\b.*\b(contract|hierarchy|amendment|msa|order form|side letter)\b/.test(normalized)) {
+    return [{ toolName: 'contractHierarchyResolver', input: input.selectedFindingId ? { ...baseInput, finding_id: input.selectedFindingId } : baseInput }];
+  }
+
+  if (/\b(root cause|why did.*leak|why.*leakage|why did this happen|why did this leakage happen)\b/.test(normalized)) {
+    return [{ toolName: 'rootCauseClassifier', input: input.selectedFindingId ? { ...baseInput, finding_id: input.selectedFindingId } : baseInput }];
+  }
+
+  if (/\b(prevention|prevent|operational fix|recommendations?)\b/.test(normalized)) {
+    return [{ toolName: 'preventionRecommendations', input: baseInput }];
   }
 
   if (/\b(cfo|executive|board)\b.*\b(summary|brief|memo)\b/.test(normalized)) {
-    return [{ toolName: 'prepareCfoSummary', input: baseInput }];
+    return [{ toolName: 'cfoSummaryGenerator', input: baseInput }];
   }
 
   if (/\b(biggest|largest|top)\b.*\b(leakage|finding|exposure)\b/.test(normalized)) {
@@ -109,8 +142,16 @@ export function routeCopilotTools(input: {
     return [{ toolName: 'checkReportReadiness', input: baseInput }];
   }
 
+  if (/\b(audit ready|audit readiness|ready for audit|readiness score)\b/.test(normalized)) {
+    return [{ toolName: 'auditReadinessScore', input: baseInput }];
+  }
+
+  if (/\b(next best action|what should i do next|what do i do next|next action|next step)\b/.test(normalized)) {
+    return [{ toolName: 'nextBestAction', input: baseInput }];
+  }
+
   if (/\b(missing|upload|data gap|incomplete|no contract|no invoice|no usage)\b/.test(normalized)) {
-    return [{ toolName: 'detectMissingData', input: baseInput }];
+    return [{ toolName: 'missingDataDetector', input: baseInput }];
   }
 
   if (/\b(needs? review|review burden|pending review|what.*review)\b/.test(normalized)) {
@@ -158,6 +199,7 @@ export function getWorkspaceSummary(context: CopilotDataContext, input: CopilotT
   const terms = context.terms.filter((term) => term.workspaceId === scoped.workspace_id);
   const findings = context.findings.filter((finding) => finding.workspaceId === scoped.workspace_id);
   const evidencePacks = context.evidencePacks.filter((pack) => pack.workspaceId === scoped.workspace_id);
+  const readiness = buildAuditReadinessFromCopilotContext(context);
   const warnings = readinessWarnings(context);
 
   return {
@@ -178,6 +220,9 @@ export function getWorkspaceSummary(context: CopilotDataContext, input: CopilotT
     customer_facing_findings_count: findings.filter((finding) => isCustomerFacingFindingStatus(finding.status)).length,
     internal_pipeline_count: findings.filter((finding) => isInternalPipelineFindingStatus(finding.status)).length,
     report_count: evidencePacks.length,
+    readiness_score: readiness.readinessScore,
+    readiness_label: readiness.readinessLabel,
+    next_best_action: readiness.nextBestAction.action,
     readiness_warnings: warnings
   };
 }
@@ -319,6 +364,7 @@ export function checkReportReadiness(context: CopilotDataContext, input: Copilot
 
 export function detectMissingData(context: CopilotDataContext, input: CopilotToolBaseInput) {
   const scoped = validateBaseInput(context, input);
+  const readiness = buildAuditReadinessFromCopilotContext(context);
   const documents = context.documents.filter((document) => document.workspaceId === scoped.workspace_id);
   const contractDocuments = documents.filter((document) => document.documentType === 'contract');
   const invoiceDocuments = documents.filter((document) => document.documentType === 'invoice_csv');
@@ -330,6 +376,12 @@ export function detectMissingData(context: CopilotDataContext, input: CopilotToo
   );
 
   return {
+    readiness_score: readiness.readinessScore,
+    readiness_label: readiness.readinessLabel,
+    items: readiness.missingData,
+    blockers: readiness.blockers,
+    warnings: readiness.warnings,
+    next_best_action: readiness.nextBestAction,
     no_contract_uploaded: contractDocuments.length === 0,
     no_invoice_csv_uploaded: invoiceDocuments.length === 0,
     no_usage_csv_uploaded: usageDocuments.length === 0,
@@ -346,6 +398,86 @@ export function detectMissingData(context: CopilotDataContext, input: CopilotToo
     low_confidence_extraction_terms: context.terms
       .filter((term) => term.workspaceId === scoped.workspace_id && term.reviewStatus !== 'rejected' && term.confidence < 0.75)
       .map((term) => ({ term_id: term.id, confidence: term.confidence }))
+  };
+}
+
+export function dataMappingAssistant(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  const scoped = validateBaseInput(context, input);
+  const csvDocuments = context.documents.filter((document) =>
+    document.workspaceId === scoped.workspace_id && ['invoice_csv', 'usage_csv', 'customer_csv'].includes(document.documentType)
+  );
+
+  return {
+    ...featureIntegration({
+      feature: 'data_mapping',
+      method: 'POST',
+      path: `/api/workspaces/${scoped.workspace_id}/data-mapping/suggest`,
+      execution: 'requires_input',
+      requiredRole: 'reviewer',
+      warnings: [
+        'Copilot needs uploaded CSV headers and safe sample shapes before the data mapping route can suggest field mappings.',
+        'Mapping confirmation stays outside read-only Copilot and must use the guarded data-mapping confirmation flow.'
+      ]
+    }),
+    csv_document_refs: csvDocuments.map((document) => ({
+      source_document_id: document.id,
+      document_type: document.documentType,
+      parse_status: document.parseStatus
+    })),
+    required_input_refs: ['document_type', 'file_name', 'csv_headers', 'sample_rows'],
+    confirm_route: {
+      method: 'POST',
+      path: `/api/workspaces/${scoped.workspace_id}/data-mapping/confirm`,
+      execution: 'pending_action_required'
+    }
+  };
+}
+
+export function missingDataDetector(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  return {
+    ...detectMissingData(context, input),
+    feature_route: featureIntegration({
+      feature: 'missing_data_detection',
+      method: 'GET',
+      path: `/api/workspaces/${input.workspace_id}/readiness?organization_id=${input.organization_id}`,
+      execution: 'direct_read_only',
+      requiredRole: null
+    })
+  };
+}
+
+export function auditReadinessScore(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  const scoped = validateBaseInput(context, input);
+  const readiness = auditReadinessPayloadSchema.parse(buildAuditReadinessFromCopilotContext(context));
+  return {
+    ...readiness,
+    feature_route: featureIntegration({
+      feature: 'audit_readiness',
+      method: 'GET',
+      path: `/api/workspaces/${scoped.workspace_id}/readiness?organization_id=${scoped.organization_id}`,
+      execution: 'direct_read_only',
+      requiredRole: null
+    })
+  };
+}
+
+export function nextBestAction(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  const scoped = validateBaseInput(context, input);
+  const readiness = auditReadinessPayloadSchema.parse(buildAuditReadinessFromCopilotContext(context));
+  return {
+    next_best_action: readiness.nextBestAction,
+    readiness_score: readiness.readinessScore,
+    readiness_label: readiness.readinessLabel,
+    blocker_count: readiness.blockers.length,
+    warning_count: readiness.warnings.length,
+    secondary_actions: readiness.nextBestAction.secondaryActions,
+    feature_route: featureIntegration({
+      feature: 'next_best_action',
+      method: 'GET',
+      path: `/api/workspaces/${scoped.workspace_id}/readiness?organization_id=${scoped.organization_id}`,
+      execution: 'direct_read_only',
+      requiredRole: null
+    })
   };
 }
 
@@ -375,6 +507,161 @@ export function prepareCfoSummaryData(context: CopilotDataContext, input: Copilo
       status: finding.status,
       outcome_type: finding.outcome_type
     }))
+  };
+}
+
+export function cfoSummaryGenerator(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  const scoped = validateBaseInput(context, input);
+  return {
+    ...prepareCfoSummary(context, input),
+    feature_route: featureIntegration({
+      feature: 'cfo_summary_draft',
+      method: 'POST',
+      path: `/api/workspaces/${scoped.workspace_id}/cfo-summary`,
+      execution: 'direct_read_only',
+      requiredRole: 'reviewer',
+      warnings: [
+        'Customer-facing summary data includes only approved, customer_ready, and recovered findings that remain separate from internal exposure.'
+      ]
+    })
+  };
+}
+
+export function recoveryNoteGenerator(context: CopilotDataContext, input: GetFindingDetailInput) {
+  const scoped = getFindingDetailInputSchema.parse(input);
+  return {
+    ...prepareRecoveryNote(context, scoped),
+    feature_route: featureIntegration({
+      feature: 'recovery_note_draft',
+      method: 'POST',
+      path: `/api/findings/${scoped.finding_id}/recovery-note`,
+      execution: 'pending_action_required',
+      requiredRole: 'reviewer',
+      warnings: [
+        'Persisting a recovery-note draft requires a pending Copilot action and human confirmation.',
+        'Customer-facing language remains blocked until finding status and approved evidence satisfy report rules.'
+      ]
+    })
+  };
+}
+
+export function contractHierarchyResolver(context: CopilotDataContext, input: OptionalFindingInput) {
+  const scoped = optionalFindingInputSchema.parse(input);
+  validateBaseInput(context, scoped);
+  const finding = scoped.finding_id ? findScopedFinding(context, scoped.finding_id, scoped.workspace_id) : null;
+  const customerId = finding?.customerId ?? null;
+  return {
+    selected_customer_ref: customerRef(customerId),
+    selected_finding_id: finding?.id ?? null,
+    can_prepare_resolution: Boolean(customerId),
+    required_input_refs: customerId ? [] : ['customer_id'],
+    feature_route: featureIntegration({
+      feature: 'contract_hierarchy_resolution',
+      method: 'POST',
+      path: `/api/workspaces/${scoped.workspace_id}/contract-hierarchy/resolve`,
+      execution: 'pending_action_required',
+      requiredRole: 'reviewer',
+      warnings: customerId
+        ? ['Resolution can be prepared as a pending action; approved terms remain human-controlled.']
+        : ['Select or reference a customer before resolving contract hierarchy.']
+    })
+  };
+}
+
+export function rootCauseClassifier(context: CopilotDataContext, input: OptionalFindingInput) {
+  const scoped = optionalFindingInputSchema.parse(input);
+  validateBaseInput(context, scoped);
+  if (!scoped.finding_id) {
+    return {
+      status: 'finding_required',
+      message: 'Select a finding before asking why a specific leakage happened.',
+      feature_route: featureIntegration({
+        feature: 'root_cause_classification',
+        method: 'POST',
+        path: '/api/findings/[id]/root-cause',
+        execution: 'requires_input',
+        requiredRole: 'reviewer',
+        warnings: ['Finding-level root cause classification needs a selected finding.']
+      })
+    };
+  }
+  const finding = findScopedFinding(context, scoped.finding_id, scoped.workspace_id);
+  const approvedEvidence = evidenceForFinding(context, finding.id, scoped.workspace_id)
+    .filter((item) => item.approvalState === 'approved' && item.reviewedBy && item.reviewedAt)
+    .map((item) => ({
+      evidenceId: item.id,
+      evidenceType: item.evidenceType,
+      sourceType: item.sourceType,
+      label: `${item.evidenceType.replaceAll('_', ' ')} evidence`,
+      approvalState: 'approved' as const
+    }));
+  const rootCause = classifyRootCauseDeterministic({
+    finding: {
+      id: finding.id,
+      type: finding.findingType,
+      outcomeType: finding.outcomeType,
+      title: safeFindingLabel(finding),
+      summary: redactSafeText(finding.summary, ''),
+      status: finding.status,
+      estimatedAmountMinor: finding.amountMinor,
+      currency: finding.currency,
+      confidence: finding.confidence,
+      evidenceCoverageStatus: finding.evidenceCoverageStatus,
+      calculation: finding.calculation
+    },
+    approvedEvidence
+  });
+
+  return {
+    finding_id: finding.id,
+    root_cause: rootCause,
+    classification_source: 'deterministic_copilot_preview',
+    advisory_only: true,
+    feature_route: featureIntegration({
+      feature: 'root_cause_classification',
+      method: 'POST',
+      path: `/api/findings/${finding.id}/root-cause`,
+      execution: 'direct_read_only',
+      requiredRole: 'reviewer',
+      warnings: rootCause.caveats
+    })
+  };
+}
+
+export function preventionRecommendations(context: CopilotDataContext, input: CopilotToolBaseInput) {
+  const scoped = validateBaseInput(context, input);
+  const rootCauses = buildRootCauseAnalytics({
+    findings: context.findings.map((finding) => ({
+      id: finding.id,
+      title: safeFindingLabel(finding),
+      findingType: finding.findingType,
+      outcomeType: finding.outcomeType,
+      status: finding.status,
+      amountMinor: finding.amountMinor,
+      currency: finding.currency,
+      confidence: finding.confidence,
+      summary: redactSafeText(finding.summary, ''),
+      evidenceCoverageStatus: finding.evidenceCoverageStatus,
+      calculation: finding.calculation
+    }))
+  });
+
+  return {
+    currency: rootCauses.currency,
+    customer_facing: rootCauses.customerFacing.preventionPriority,
+    internal_pipeline: rootCauses.internalPipeline.preventionPriority,
+    recurring_patterns: rootCauses.recurringPatterns,
+    top_operational_fixes: rootCauses.topOperationalFixes,
+    feature_route: featureIntegration({
+      feature: 'prevention_recommendations',
+      method: 'GET',
+      path: `/api/workspaces/${scoped.workspace_id}/root-causes?organization_id=${scoped.organization_id}`,
+      execution: 'direct_read_only',
+      requiredRole: null,
+      warnings: [
+        'Customer-facing amounts and internal pipeline exposure are reported separately.'
+      ]
+    })
   };
 }
 
@@ -419,6 +706,22 @@ export function buildCopilotAnswer(executions: CopilotToolExecution[]): string {
     return 'I checked the workspace for missing source data, pending terms, low-confidence terms, and findings without approved evidence.';
   }
 
+  if (primary.toolName === 'dataMappingAssistant') {
+    return 'I routed this to the data mapping assistant. It needs CSV headers and safe sample shapes before it can suggest mappings; confirmation stays in the guarded mapping flow.';
+  }
+
+  if (primary.toolName === 'missingDataDetector') {
+    return 'I checked the missing-data detector for source uploads, customer mapping, review gaps, and evidence blockers.';
+  }
+
+  if (primary.toolName === 'auditReadinessScore') {
+    return 'I checked the deterministic audit readiness score and blockers. No report or finding state changed.';
+  }
+
+  if (primary.toolName === 'nextBestAction') {
+    return 'I found the next best action from deterministic readiness blockers. Any mutation still needs confirmation.';
+  }
+
   if (primary.toolName === 'getFindingDetail') {
     return 'I loaded the selected finding detail with formula inputs and evidence references only.';
   }
@@ -431,11 +734,11 @@ export function buildCopilotAnswer(executions: CopilotToolExecution[]): string {
     return 'I explained the selected finding formula deterministically from the stored calculation object.';
   }
 
-  if (primary.toolName === 'evidenceQualityReview') {
+  if (primary.toolName === 'evidenceQualityReview' || primary.toolName === 'evidenceQualityScorer') {
     return 'I reviewed evidence quality for the selected finding. This is advisory and does not approve evidence or change status.';
   }
 
-  if (primary.toolName === 'falsePositiveRiskCheck') {
+  if (primary.toolName === 'falsePositiveRiskCheck' || primary.toolName === 'falsePositiveCritic') {
     return 'I checked false-positive risk factors for the selected finding. This is a reviewer aid, not an approval decision.';
   }
 
@@ -443,12 +746,24 @@ export function buildCopilotAnswer(executions: CopilotToolExecution[]): string {
     return 'I drafted a reviewer checklist for the selected finding without changing the finding or evidence.';
   }
 
-  if (primary.toolName === 'prepareCfoSummary') {
+  if (primary.toolName === 'prepareCfoSummary' || primary.toolName === 'cfoSummaryGenerator') {
     return 'I prepared a CFO summary from code-calculated analytics, keeping customer-facing leakage separate from internal exposure.';
   }
 
-  if (primary.toolName === 'prepareRecoveryNote') {
+  if (primary.toolName === 'prepareRecoveryNote' || primary.toolName === 'recoveryNoteGenerator') {
     return 'I drafted recovery-note content for human review only. Nothing was sent and no status was changed.';
+  }
+
+  if (primary.toolName === 'contractHierarchyResolver') {
+    return 'I routed this to the contract hierarchy resolver. Any relationship persistence or term review changes require a pending action and human confirmation.';
+  }
+
+  if (primary.toolName === 'rootCauseClassifier') {
+    return 'I classified the likely root cause from safe finding metadata and deterministic calculation signals. This is advisory only.';
+  }
+
+  if (primary.toolName === 'preventionRecommendations') {
+    return 'I prepared prevention recommendations from deterministic root-cause analytics, keeping customer-facing and internal pipeline exposure separate.';
   }
 
   return 'I loaded the workspace summary and readiness warnings.';
@@ -461,13 +776,24 @@ function runToolUnsafe(context: CopilotDataContext, toolName: CopilotToolName, i
   if (toolName === 'getFindingDetail') return getFindingDetail(context, getFindingDetailInputSchema.parse(input));
   if (toolName === 'checkReportReadiness') return checkReportReadiness(context, copilotToolBaseInputSchema.parse(input));
   if (toolName === 'detectMissingData') return detectMissingData(context, copilotToolBaseInputSchema.parse(input));
+  if (toolName === 'dataMappingAssistant') return dataMappingAssistant(context, copilotToolBaseInputSchema.parse(input));
+  if (toolName === 'missingDataDetector') return missingDataDetector(context, copilotToolBaseInputSchema.parse(input));
+  if (toolName === 'auditReadinessScore') return auditReadinessScore(context, copilotToolBaseInputSchema.parse(input));
+  if (toolName === 'nextBestAction') return nextBestAction(context, copilotToolBaseInputSchema.parse(input));
   if (toolName === 'prepareCfoSummaryData') return prepareCfoSummaryData(context, copilotToolBaseInputSchema.parse(input));
   if (toolName === 'explainFindingFormulaDeterministic') return explainFindingFormulaDeterministic(context, getFindingDetailInputSchema.parse(input));
   if (toolName === 'evidenceQualityReview') return evidenceQualityReview(context, getFindingDetailInputSchema.parse(input));
+  if (toolName === 'evidenceQualityScorer') return evidenceQualityReview(context, getFindingDetailInputSchema.parse(input));
   if (toolName === 'falsePositiveRiskCheck') return falsePositiveRiskCheck(context, getFindingDetailInputSchema.parse(input));
+  if (toolName === 'falsePositiveCritic') return falsePositiveRiskCheck(context, getFindingDetailInputSchema.parse(input));
   if (toolName === 'reviewerChecklist') return reviewerChecklist(context, getFindingDetailInputSchema.parse(input));
   if (toolName === 'prepareCfoSummary') return prepareCfoSummary(context, copilotToolBaseInputSchema.parse(input));
+  if (toolName === 'cfoSummaryGenerator') return cfoSummaryGenerator(context, copilotToolBaseInputSchema.parse(input));
   if (toolName === 'prepareRecoveryNote') return prepareRecoveryNote(context, getFindingDetailInputSchema.parse(input));
+  if (toolName === 'recoveryNoteGenerator') return recoveryNoteGenerator(context, getFindingDetailInputSchema.parse(input));
+  if (toolName === 'contractHierarchyResolver') return contractHierarchyResolver(context, optionalFindingInputSchema.parse(input));
+  if (toolName === 'rootCauseClassifier') return rootCauseClassifier(context, optionalFindingInputSchema.parse(input));
+  if (toolName === 'preventionRecommendations') return preventionRecommendations(context, copilotToolBaseInputSchema.parse(input));
   throw new Error('unsupported_copilot_tool');
 }
 
@@ -503,13 +829,35 @@ function outputRefs(toolName: CopilotToolName, output: unknown): Record<string, 
   if (toolName === 'getFindingDetail' && isRecord(output)) {
     return { finding_id: output.finding_id };
   }
-  if (['evidenceQualityReview', 'falsePositiveRiskCheck', 'reviewerChecklist', 'prepareRecoveryNote'].includes(toolName) && isRecord(output)) {
+  if ([
+    'evidenceQualityReview',
+    'evidenceQualityScorer',
+    'falsePositiveRiskCheck',
+    'falsePositiveCritic',
+    'reviewerChecklist',
+    'prepareRecoveryNote',
+    'recoveryNoteGenerator',
+    'rootCauseClassifier'
+  ].includes(toolName) && isRecord(output)) {
     return { finding_id: output.finding_id, advisory_only: output.advisory_only };
   }
-  if (toolName === 'prepareCfoSummary' && isRecord(output)) {
+  if ((toolName === 'prepareCfoSummary' || toolName === 'cfoSummaryGenerator') && isRecord(output)) {
     return {
       workspace_id: output.workspace_id,
       advisory_only: output.advisory_only
+    };
+  }
+  if (toolName === 'dataMappingAssistant' && isRecord(output)) {
+    return { feature: 'data_mapping', route: routePathFromOutput(output), required_input_refs: output.required_input_refs };
+  }
+  if (['missingDataDetector', 'auditReadinessScore', 'nextBestAction', 'preventionRecommendations'].includes(toolName) && isRecord(output)) {
+    return { feature: routeFeatureFromOutput(output), route: routePathFromOutput(output) };
+  }
+  if (toolName === 'contractHierarchyResolver' && isRecord(output)) {
+    return {
+      feature: 'contract_hierarchy_resolution',
+      can_prepare_resolution: output.can_prepare_resolution,
+      selected_customer_ref: output.selected_customer_ref
     };
   }
   if (toolName === 'checkReportReadiness' && isRecord(output)) {
@@ -521,18 +869,58 @@ function outputRefs(toolName: CopilotToolName, output: unknown): Record<string, 
   return { tool_name: toolName };
 }
 
+function featureIntegration(input: {
+  feature: 'data_mapping'
+    | 'missing_data_detection'
+    | 'audit_readiness'
+    | 'next_best_action'
+    | 'evidence_quality_review'
+    | 'false_positive_review'
+    | 'contract_hierarchy_resolution'
+    | 'recovery_note_draft'
+    | 'cfo_summary_draft'
+    | 'root_cause_classification'
+    | 'prevention_recommendations';
+  method: 'GET' | 'POST';
+  path: string;
+  execution: 'direct_read_only' | 'pending_action_required' | 'requires_input';
+  requiredRole: 'member' | 'reviewer' | null;
+  warnings?: string[];
+}) {
+  return copilotFeatureIntegrationSchema.parse({
+    feature: input.feature,
+    route: {
+      method: input.method,
+      path: input.path,
+      execution: input.execution,
+      required_role: input.requiredRole
+    },
+    advisory_only: true,
+    code_calculates_money: true,
+    human_approval_required: true,
+    mutating_actions_require_confirmation: true,
+    customer_facing_rules_preserved: true,
+    warnings: input.warnings ?? []
+  });
+}
+
+function routePathFromOutput(output: Record<string, unknown>): string | null {
+  const featureRoute = output.feature_route;
+  const route = isRecord(featureRoute) ? featureRoute.route : isRecord(output.route) ? output.route : null;
+  return isRecord(route) && typeof route.path === 'string' ? route.path : null;
+}
+
+function routeFeatureFromOutput(output: Record<string, unknown>): string | null {
+  const featureRoute = output.feature_route;
+  return isRecord(featureRoute) && typeof featureRoute.feature === 'string' ? featureRoute.feature : null;
+}
+
 function readinessWarnings(context: CopilotDataContext): string[] {
   const missingData = detectMissingData(context, {
     organization_id: context.organization.id,
     workspace_id: context.workspace.id
   });
-  const warnings: string[] = [];
-  if (missingData.no_contract_uploaded) warnings.push('No contract document is uploaded.');
-  if (missingData.no_invoice_csv_uploaded) warnings.push('No invoice CSV is uploaded.');
-  if (missingData.no_usage_csv_uploaded) warnings.push('No usage CSV is uploaded.');
-  if (missingData.terms_pending_review.length > 0) warnings.push('Some extracted terms still need finance review.');
-  if (missingData.findings_missing_evidence.length > 0) warnings.push('Some findings do not have approved evidence.');
-  return warnings;
+  return [...missingData.blockers, ...missingData.warnings].map((item) => item.title).slice(0, 12);
 }
 
 function findScopedFinding(context: CopilotDataContext, findingId: string, workspaceId: string): CopilotFinding {

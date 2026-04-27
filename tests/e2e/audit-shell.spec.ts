@@ -199,6 +199,47 @@ const analytics = {
   }
 };
 
+const readiness = {
+  readinessScore: 92,
+  readinessLabel: 'report_ready',
+  blockers: [],
+  warnings: [],
+  missingData: [],
+  nextBestAction: {
+    action: 'generate_report',
+    title: 'Generate report',
+    explanation: 'At least one customer-facing finding has approved evidence and deterministic formula inputs.',
+    ctaLabel: 'Generate report',
+    deepLink: '/app/reports',
+    secondaryActions: []
+  },
+  generatedAt: '2026-04-03T00:00:00.000Z',
+  source: 'deterministic'
+};
+
+const rootCauses = {
+  currency: 'USD',
+  generatedAt: '2026-04-03T00:00:00.000Z',
+  customerFacing: {
+    label: 'Customer-facing root causes',
+    description: 'Amounts include only approved, customer_ready, and recovered findings.',
+    statuses: ['approved', 'customer_ready', 'recovered'],
+    rootCausesByCount: [{ label: 'Minimum commitment not monitored', value: 1, count: 1, amountMinor: expectedLeakageMinor }],
+    rootCausesByLeakageAmount: [{ label: 'Minimum commitment not monitored', value: expectedLeakageMinor, count: 1, amountMinor: expectedLeakageMinor }],
+    preventionPriority: []
+  },
+  internalPipeline: {
+    label: 'Internal root-cause pipeline',
+    description: 'Draft and needs-review amounts are internal exposure, not customer-facing leakage.',
+    statuses: ['draft', 'needs_review'],
+    rootCausesByCount: [],
+    rootCausesByLeakageAmount: [],
+    preventionPriority: []
+  },
+  recurringPatterns: [],
+  topOperationalFixes: []
+};
+
 test.beforeEach(async ({ context, page, baseURL }) => {
   const session = createSession();
   const serialized = JSON.stringify(session);
@@ -223,8 +264,8 @@ test.beforeEach(async ({ context, page, baseURL }) => {
 test('mocked audit shell renders the core production workflow pages', async ({ page }) => {
   const workflowPages = [
     { path: '/app', title: 'Audit Overview', proof: 'Recoverable leakage' },
-    { path: '/app/uploads', title: 'Source documents', proof: 'Document processing pipeline' },
-    { path: '/app/findings', title: 'Revenue findings', proof: 'Minimum commitment shortfall' },
+    { path: '/app/uploads', title: 'Source documents', proof: 'Customer list optional' },
+    { path: '/app/findings', title: 'Revenue findings', proof: 'Review queue' },
     { path: '/app/analytics', title: 'Analytics', proof: 'Customer-facing leakage' },
     { path: '/app/reports', title: 'Customer-ready report', proof: 'Approved findings only' }
   ];
@@ -236,6 +277,9 @@ test('mocked audit shell renders the core production workflow pages', async ({ p
     await expect(page.getByText('E2E Customer Org').first()).toBeVisible();
     await expect(page.getByText('Revenue Leakage Audit').first()).toBeVisible();
     await expect(page.getByText(workflowPage.proof).first()).toBeVisible();
+    if (workflowPage.path === '/app') {
+      await expect(page.getByText('What is leaking').first()).toBeVisible();
+    }
   }
 
   await expect(page.getByText('USD 26,690.00').first()).toBeVisible();
@@ -323,6 +367,8 @@ async function mockAuditApi(page: Page) {
     }
     if (path === '/api/evidence-candidates') return fulfillJson(route, { candidates: evidenceCandidates });
     if (path === `/api/workspaces/${workspaceId}/analytics`) return fulfillJson(route, { analytics });
+    if (path === `/api/workspaces/${workspaceId}/readiness`) return fulfillJson(route, { readiness });
+    if (path === `/api/workspaces/${workspaceId}/root-causes`) return fulfillJson(route, { rootCauses });
 
     return fulfillJson(route, { error: `Unmocked E2E API route: ${path}` }, 404);
   });

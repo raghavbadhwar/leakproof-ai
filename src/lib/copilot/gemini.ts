@@ -141,16 +141,22 @@ function dataFromExecutions(executions: CopilotToolExecution[]): Record<string, 
 }
 
 function inferAnswerType(toolNames: CopilotToolName[]): CopilotAnswerType {
-  if (toolNames.includes('falsePositiveRiskCheck')) return 'false_positive_risk';
+  if (toolNames.includes('dataMappingAssistant')) return 'data_mapping';
+  if (toolNames.includes('auditReadinessScore')) return 'audit_readiness';
+  if (toolNames.includes('nextBestAction')) return 'next_best_action';
+  if (toolNames.includes('contractHierarchyResolver')) return 'contract_hierarchy';
+  if (toolNames.includes('rootCauseClassifier')) return 'root_cause';
+  if (toolNames.includes('preventionRecommendations')) return 'prevention_recommendations';
+  if (toolNames.includes('falsePositiveRiskCheck') || toolNames.includes('falsePositiveCritic')) return 'false_positive_risk';
   if (toolNames.includes('reviewerChecklist')) return 'reviewer_checklist';
-  if (toolNames.includes('prepareRecoveryNote')) return 'recovery_note';
-  if (toolNames.includes('prepareCfoSummary')) return 'cfo_summary';
-  if (toolNames.includes('evidenceQualityReview')) return 'evidence_review';
+  if (toolNames.includes('prepareRecoveryNote') || toolNames.includes('recoveryNoteGenerator')) return 'recovery_note';
+  if (toolNames.includes('prepareCfoSummary') || toolNames.includes('cfoSummaryGenerator')) return 'cfo_summary';
+  if (toolNames.includes('evidenceQualityReview') || toolNames.includes('evidenceQualityScorer')) return 'evidence_review';
   if (toolNames.includes('getFindingDetail') || toolNames.includes('explainFindingFormulaDeterministic')) {
     return 'finding_explanation';
   }
   if (toolNames.includes('checkReportReadiness')) return 'report_readiness';
-  if (toolNames.includes('detectMissingData')) return 'missing_data';
+  if (toolNames.includes('detectMissingData') || toolNames.includes('missingDataDetector')) return 'missing_data';
   if (toolNames.includes('prepareCfoSummaryData') || toolNames.includes('getWorkspaceSummary')) return 'audit_summary';
   return 'direct_answer';
 }

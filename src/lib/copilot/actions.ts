@@ -87,6 +87,8 @@ export type CopilotWorkflowRunners = {
   runExtraction?: (input: { organizationId: string; workspaceId: string; sourceDocumentId: string }) => Promise<unknown>;
   runReconciliation?: (input: { organizationId: string; workspaceId: string }) => Promise<unknown>;
   generateReportDraft?: (input: { organizationId: string; workspaceId: string }) => Promise<unknown>;
+  draftRecoveryNote?: (input: { organizationId: string; workspaceId: string; findingId: string }) => Promise<unknown>;
+  resolveContractHierarchy?: (input: { organizationId: string; workspaceId: string; customerId: string }) => Promise<unknown>;
 };
 
 export const COPILOT_ACTION_POLICIES: Record<CopilotActionType, ActionPolicy> = {
@@ -152,6 +154,13 @@ export const COPILOT_ACTION_POLICIES: Record<CopilotActionType, ActionPolicy> = 
     riskLevel: 'medium',
     title: 'Prepare recovery note',
     description: 'Prepare a confirmation to add a recovery workflow note.'
+  },
+  prepare_contract_hierarchy_resolution: {
+    requiredRoles: REVIEWER_WRITE_ROLES,
+    requiredRole: 'reviewer',
+    riskLevel: 'high',
+    title: 'Prepare contract hierarchy resolution',
+    description: 'Prepare a confirmation to resolve contract document hierarchy for review.'
   }
 };
 
@@ -187,6 +196,17 @@ export function detectCopilotActionIntent(input: {
   if (/\b(generate|prepare|create|draft)\b.*\b(report)\b/.test(normalized)) {
     return { actionType: 'prepare_generate_report_draft', targetEntityType: input.selectedReportId ? 'report' : 'workspace', targetEntityId: input.selectedReportId ?? null };
   }
+  if (/\b(resolve|run|prepare|review)\b.*\b(contract hierarchy|hierarchy|amendment|msa|order form|side letter)\b/.test(normalized)) {
+    return {
+      actionType: 'prepare_contract_hierarchy_resolution',
+      targetEntityType: firstUuid ? 'customer' : 'workspace',
+      targetEntityId: firstUuid,
+      payloadRefs: {
+        customer_id: firstUuid,
+        finding_id: input.selectedFindingId
+      }
+    };
+  }
   if (/\b(approve|mark|change|update)\b.*\b(finding|status|customer ready|customer-ready)\b/.test(normalized)) {
     return {
       actionType: 'prepare_update_finding_status',
@@ -214,7 +234,7 @@ export function detectCopilotActionIntent(input: {
       payloadRefs: { reviewer_user_id: firstUuid }
     };
   }
-  if (/\b(add|save|record|persist)\b.*\b(recovery|recover|collection|follow[- ]?up)\b.*\b(note|memo|comment)\b/.test(normalized)) {
+  if (/\b(add|save|record|persist|draft|prepare|create)\b.*\b(recovery|recover|collection|follow[- ]?up)\b.*\b(note|memo|comment)\b/.test(normalized)) {
     return { actionType: 'prepare_recovery_note', targetEntityType: input.selectedFindingId ? 'finding' : 'workspace', targetEntityId: input.selectedFindingId ?? null };
   }
   return null;
@@ -228,11 +248,19 @@ export function buildPendingCopilotActionProposal(input: {
 }): PendingCopilotActionProposal {
   const policy = policyForAction(input.intent.actionType);
   assertRoleAllowed(input.actorRole, policy.requiredRoles);
-  const blockers = actionBlockers(input.context, input.intent);
-  const targetId = input.intent.targetEntityId ?? (input.intent.targetEntityType === 'workspace' ? input.context.workspace.id : null);
+  const enrichedPayloadRefs = enrichActionPayloadRefs(input.context, input.intent);
+  const enrichedCustomerId = stringPayload(enrichedPayloadRefs, 'customer_id');
+  const enrichedIntent = {
+    ...input.intent,
+    targetEntityType: input.intent.actionType === 'prepare_contract_hierarchy_resolution' && enrichedCustomerId ? 'customer' : input.intent.targetEntityType,
+    targetEntityId: input.intent.actionType === 'prepare_contract_hierarchy_resolution' && enrichedCustomerId ? enrichedCustomerId : input.intent.targetEntityId,
+    payloadRefs: enrichedPayloadRefs
+  };
+  const blockers = actionBlockers(input.context, enrichedIntent);
+  const targetId = enrichedIntent.targetEntityId ?? (enrichedIntent.targetEntityType === 'workspace' ? input.context.workspace.id : null);
 
   return {
-    ...input.intent,
+    ...enrichedIntent,
     organizationId: input.context.organization.id,
     workspaceId: input.context.workspace.id,
     targetEntityId: targetId,
@@ -246,7 +274,7 @@ export function buildPendingCopilotActionProposal(input: {
       target_entity_id: targetId,
       workspace_id: input.context.workspace.id,
       proposed_status: input.intent.actionType === 'prepare_update_finding_status' ? input.intent.payloadRefs?.proposed_status ?? 'approved' : undefined,
-      ...input.intent.payloadRefs,
+      ...enrichedPayloadRefs,
       execution_deferred: true
     }),
     preview: {
@@ -471,6 +499,12 @@ async function executeActionByType(
   }
   if (action.action_type === 'prepare_generate_report_draft') {
     return executeGenerateReportDraft(supabase, action, input.actorUserId, input.runners);
+  }
+  if (action.action_type === 'prepare_recovery_note') {
+    return executeRecoveryNoteDraft(action, input.runners);
+  }
+  if (action.action_type === 'prepare_contract_hierarchy_resolution') {
+    return executeContractHierarchyResolution(action, input.runners);
   }
 
   throw new Error('unsupported_copilot_action');
@@ -742,6 +776,54 @@ async function executeGenerateReportDraft(
   }
 
   return generateReportDraftDirect(supabase, action, actorUserId);
+}
+
+async function executeRecoveryNoteDraft(
+  action: AssistantActionRecord,
+  runners?: CopilotWorkflowRunners
+): Promise<CopilotActionExecutionResult> {
+  const findingId = action.target_entity_type === 'finding' ? action.target_entity_id : stringPayload(action.payload_refs, 'finding_id');
+  if (!findingId) throw new Error('finding_id_required');
+  if (!runners?.draftRecoveryNote) throw new Error('copilot_runner_unavailable');
+
+  const payload = await runners.draftRecoveryNote({
+    organizationId: action.organization_id,
+    workspaceId: action.workspace_id,
+    findingId
+  });
+  const record = isRecord(payload) ? payload : {};
+
+  return executedResult('Recovery-note draft prepared for human review. Nothing was sent and no invoice was created.', {
+    finding_id: findingId,
+    draft_id: stringPayload(record, 'draft_id'),
+    persisted: typeof record.persisted === 'boolean' ? record.persisted : null,
+    customer_facing_enabled: typeof record.customer_facing_enabled === 'boolean' ? record.customer_facing_enabled : null,
+    deep_link: `/app/findings/${findingId}`
+  });
+}
+
+async function executeContractHierarchyResolution(
+  action: AssistantActionRecord,
+  runners?: CopilotWorkflowRunners
+): Promise<CopilotActionExecutionResult> {
+  const customerId = stringPayload(action.payload_refs, 'customer_id') ?? (action.target_entity_type === 'customer' ? action.target_entity_id : null);
+  if (!customerId) throw new Error('customer_id_required');
+  if (!runners?.resolveContractHierarchy) throw new Error('copilot_runner_unavailable');
+
+  const payload = await runners.resolveContractHierarchy({
+    organizationId: action.organization_id,
+    workspaceId: action.workspace_id,
+    customerId
+  });
+  const record = isRecord(payload) ? payload : {};
+
+  return executedResult('Contract hierarchy resolution completed for human review. Approved terms were not auto-approved or replaced.', {
+    customer_id: customerId,
+    relationships_inserted: typeof record.relationships_inserted === 'number' ? record.relationships_inserted : null,
+    terms_marked_needs_review: typeof record.terms_marked_needs_review === 'number' ? record.terms_marked_needs_review : null,
+    approved_terms_left_unchanged: typeof record.approved_terms_left_unchanged === 'number' ? record.approved_terms_left_unchanged : null,
+    deep_link: '/app/contract-hierarchy'
+  });
 }
 
 async function approveEvidenceCandidate(
@@ -1233,6 +1315,13 @@ function actionBlockers(context: CopilotDataContext, intent: CopilotActionIntent
   if (intent.actionType === 'prepare_attach_evidence_candidate' && !intent.payloadRefs?.document_chunk_id && !intent.payloadRefs?.evidence_candidate_id) {
     blockers.push('Select an evidence candidate or document chunk before attaching evidence.');
   }
+  if (intent.actionType === 'prepare_recovery_note') {
+    const findingId = intent.targetEntityType === 'finding' ? intent.targetEntityId : stringPayload(intent.payloadRefs ?? {}, 'finding_id');
+    if (!findingId) blockers.push('Select a finding before drafting a recovery note.');
+  }
+  if (intent.actionType === 'prepare_contract_hierarchy_resolution' && !stringPayload(intent.payloadRefs ?? {}, 'customer_id')) {
+    blockers.push('Select or reference a customer before resolving contract hierarchy.');
+  }
   return blockers;
 }
 
@@ -1256,7 +1345,25 @@ function whatWillChange(actionType: CopilotActionType): string[] {
   if (actionType === 'prepare_run_reconciliation') return ['A deterministic reconciliation run will start after confirmation.'];
   if (actionType === 'prepare_search_evidence') return ['Evidence candidates will be searched read-only; no evidence will be approved automatically.'];
   if (actionType === 'prepare_generate_report_draft') return ['A report draft will be generated; no report will be exported automatically.'];
+  if (actionType === 'prepare_contract_hierarchy_resolution') {
+    return [
+      'Contract hierarchy relationships may be refreshed for reviewer inspection.',
+      'Approved terms will not be auto-approved, replaced, or used to calculate leakage without human review.'
+    ];
+  }
   return ['A recovery note will be prepared after confirmation.'];
+}
+
+function enrichActionPayloadRefs(context: CopilotDataContext, intent: CopilotActionIntent): Record<string, unknown> {
+  const payloadRefs = { ...(intent.payloadRefs ?? {}) };
+  if (intent.actionType === 'prepare_contract_hierarchy_resolution' && !payloadRefs.customer_id && typeof payloadRefs.finding_id === 'string') {
+    const finding = context.findings.find((item) => item.id === payloadRefs.finding_id && item.workspaceId === context.workspace.id);
+    if (finding?.customerId) payloadRefs.customer_id = finding.customerId;
+  }
+  if (intent.actionType === 'prepare_recovery_note' && intent.targetEntityType === 'finding' && intent.targetEntityId) {
+    payloadRefs.finding_id = intent.targetEntityId;
+  }
+  return payloadRefs;
 }
 
 function policyForAction(actionType: CopilotActionType): ActionPolicy {
@@ -1305,6 +1412,7 @@ const ACTION_ENTITY_REF_KEYS = [
   'evidence_item_id',
   'reviewer_user_id',
   'finding_id',
+  'customer_id',
   'report_id',
   'evidence_id'
 ];

@@ -27,6 +27,11 @@ describe('Copilot action framework', () => {
       intent: intent!,
       actorRole: 'viewer'
     })).toThrow('forbidden');
+    expect(() => buildPendingCopilotActionProposal({
+      context: context(),
+      intent: intent!,
+      actorRole: 'member'
+    })).toThrow('forbidden');
   });
 
   it('allows reviewers to prepare review workflow actions', () => {
@@ -65,9 +70,25 @@ describe('Copilot action framework', () => {
     })).toThrow('forbidden');
   });
 
-  it('keeps draft recovery notes in advisory intelligence instead of action creation', () => {
-    expect(detectCopilotActionIntent({ message: 'Draft recovery note.', selectedFindingId: findingId })).toBeNull();
+  it('keeps recovery-note persistence behind a pending action card', () => {
+    expect(detectCopilotActionIntent({ message: 'Draft recovery note.', selectedFindingId: findingId })?.actionType).toBe('prepare_recovery_note');
     expect(detectCopilotActionIntent({ message: 'Save recovery note to the finding.', selectedFindingId: findingId })?.actionType).toBe('prepare_recovery_note');
+  });
+
+  it('prepares contract hierarchy resolution only as a confirmed action', () => {
+    const intent = detectCopilotActionIntent({ message: 'Resolve contract hierarchy.', selectedFindingId: findingId });
+
+    const proposal = buildPendingCopilotActionProposal({
+      context: context(),
+      intent: intent!,
+      actorRole: 'reviewer',
+      expiresAt: '2026-04-28T00:00:00.000Z'
+    });
+
+    expect(proposal.actionType).toBe('prepare_contract_hierarchy_resolution');
+    expect(proposal.targetEntityType).toBe('customer');
+    expect(proposal.payloadRefs.customer_id).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    expect(proposal.preview.what_will_change.join(' ')).toContain('Approved terms will not be auto-approved');
   });
 
   it('re-checks role before confirming actions', () => {
@@ -151,6 +172,24 @@ describe('Copilot action framework', () => {
         runReconciliation: async () => ({ findings: [] })
       }
     })).rejects.toThrow('forbidden');
+  });
+
+  it('cannot execute a mutating AI feature action before confirmation', async () => {
+    await expect(executeConfirmedCopilotAction(fakeExecutionSupabase(executionOperations()) as never, {
+      action: actionRecord({
+        action_type: 'prepare_recovery_note',
+        target_entity_type: 'finding',
+        target_entity_id: findingId,
+        status: 'pending',
+        risk_level: 'medium',
+        payload_refs: { finding_id: findingId }
+      }),
+      actorUserId: 'reviewer-user',
+      actorRole: 'reviewer',
+      runners: {
+        draftRecoveryNote: async () => ({ draft_id: '77777777-7777-4777-8777-777777777777' })
+      }
+    })).rejects.toThrow('action_not_confirmed');
   });
 
   it('blocks finding approval when required evidence is missing', async () => {

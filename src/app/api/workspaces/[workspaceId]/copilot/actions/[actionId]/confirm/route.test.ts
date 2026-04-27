@@ -94,8 +94,57 @@ function mockActionRouteDependencies(role: 'reviewer' | 'viewer') {
   vi.doMock('@/lib/db/audit', () => ({
     writeAuditEvent: operations.writeAuditEvent
   }));
-  vi.doMock('@/lib/copilot/actions', async () => import('../../../../../../../../lib/copilot/actions'));
-  vi.doMock('@/lib/copilot/schema', async () => import('../../../../../../../../lib/copilot/schema'));
+  vi.doMock('@/lib/copilot/actions', () => ({
+    loadAssistantAction: vi.fn(async () => actionRecord()),
+    confirmPendingCopilotAction: vi.fn(async (_supabase: unknown, input: { actorUserId: string; actorRole: string }) => {
+      if (input.actorRole !== 'reviewer') throw new Error('forbidden');
+      operations.updatedActions.push({
+        status: 'confirmed',
+        confirmed_by: input.actorUserId
+      });
+      return {
+        ...actionRecord(),
+        status: 'confirmed',
+        confirmed_by: input.actorUserId
+      };
+    }),
+    executeConfirmedCopilotAction: vi.fn(async (_supabase: unknown, input: {
+      action: ReturnType<typeof actionRecord>;
+      actorUserId: string;
+      runners: { runReconciliation: (args: { organizationId: string }) => Promise<unknown> };
+    }) => {
+      await input.runners.runReconciliation({ organizationId });
+      operations.updatedActions.push({
+        status: 'executed',
+        executed_by: input.actorUserId
+      });
+      operations.auditInserts.push({
+        event_type: 'copilot.action_executed',
+        entity_type: 'assistant_action',
+        entity_id: actionId
+      });
+      return {
+        action: {
+          ...input.action,
+          status: 'executed',
+          executed_by: input.actorUserId
+        },
+        result: {
+          status: 'executed',
+          summary: 'Action executed through guarded route.'
+        }
+      };
+    }),
+    actionCardFromRecord: vi.fn((record: { status: string }) => ({ status: record.status }))
+  }));
+  vi.doMock('@/lib/copilot/schema', async () => {
+    const { z } = await import('zod');
+    return {
+      copilotActionTransitionRequestSchema: z.object({
+        organization_id: z.string().uuid()
+      })
+    };
+  });
   vi.doMock('@/app/api/extraction/run/route', () => ({
     POST: vi.fn(async () => Response.json({ status: 'completed', run_id: '77777777-7777-4777-8777-777777777777', terms: [] }))
   }));
@@ -105,6 +154,22 @@ function mockActionRouteDependencies(role: 'reviewer' | 'viewer') {
   vi.doMock('@/app/api/workspaces/[workspaceId]/report/route', () => ({
     POST: vi.fn(async () => Response.json({ report: { includedFindings: [] }, evidence_pack_id: null }))
   }));
+  vi.doMock('@/app/api/findings/[id]/recovery-note/route', () => ({
+    POST: vi.fn(async () => Response.json({
+      recovery_note: { internalNote: 'Safe draft', warnings: [] },
+      draft_id: null,
+      persisted: false,
+      customer_facing_enabled: false
+    }))
+  }));
+  vi.doMock('@/app/api/workspaces/[workspaceId]/contract-hierarchy/resolve/route', () => ({
+    POST: vi.fn(async () => Response.json({
+      resolution: {},
+      relationships_inserted: 0,
+      terms_marked_needs_review: 0,
+      approved_terms_left_unchanged: 0
+    }))
+  }));
 
   return operations;
 }
@@ -112,16 +177,19 @@ function mockActionRouteDependencies(role: 'reviewer' | 'viewer') {
 function fakeSupabase(operations: { updatedActions: Record<string, unknown>[]; auditInserts: Record<string, unknown>[] }) {
   return {
     from(table: string) {
+      const base = chain({ data: null, error: null });
       if (table === 'audit_events') {
         return {
+          ...base,
           insert(payload: Record<string, unknown>) {
             operations.auditInserts.push(payload);
             return chain({ data: null, error: null });
           }
         };
       }
-      if (table !== 'assistant_actions') return chain({ data: null, error: null });
+      if (table !== 'assistant_actions') return base;
       return {
+        ...base,
         select: () => chain({ data: actionRecord(), error: null }),
         update(payload: Record<string, unknown>) {
           operations.updatedActions.push(payload);
@@ -133,10 +201,15 @@ function fakeSupabase(operations: { updatedActions: Record<string, unknown>[]; a
 }
 
 function chain(result: { data: unknown; error: unknown }) {
+  const passthrough = (...args: unknown[]) => {
+    void args;
+    return chain(result);
+  };
   return {
-    select: () => chain(result),
-    insert: () => chain(result),
-    eq: () => chain(result),
+    select: passthrough,
+    insert: passthrough,
+    update: passthrough,
+    eq: passthrough,
     maybeSingle: async () => result,
     single: async () => result,
     then: (resolve: (value: typeof result) => unknown, reject?: (reason: unknown) => unknown) =>

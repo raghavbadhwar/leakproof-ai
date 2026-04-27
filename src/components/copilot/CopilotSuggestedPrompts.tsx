@@ -1,21 +1,22 @@
-import { BarChart3, FileQuestion, FileText, HelpCircle, ListChecks, Scale, ShieldAlert, StickyNote, TrendingUp } from 'lucide-react';
+import { BarChart3, FileQuestion, FileText, HelpCircle, ListChecks, Route, Scale, ShieldAlert, StickyNote, Table2 } from 'lucide-react';
 
 export const copilotSuggestedPrompts = [
-  { prompt: 'What is the biggest leakage?', icon: TrendingUp },
-  { prompt: 'What needs review?', icon: ListChecks },
-  { prompt: 'Is this audit report-ready?', icon: FileText },
-  { prompt: 'What data is missing?', icon: FileQuestion },
-  { prompt: 'Explain selected finding.', icon: HelpCircle },
-  { prompt: 'Prepare CFO summary.', icon: BarChart3 }
+  { prompt: 'Map uploaded CSV', icon: Table2 },
+  { prompt: 'Find missing data', icon: FileQuestion },
+  { prompt: 'Check report readiness', icon: FileText },
+  { prompt: 'What should I do next?', icon: ListChecks },
+  { prompt: 'Prepare CFO summary.', icon: BarChart3 },
+  { prompt: 'Explain root causes', icon: Route }
 ] as const;
 
 export const copilotFindingPrompts = [
   { prompt: 'Explain this finding.', icon: HelpCircle },
   { prompt: 'Explain formula.', icon: Scale },
-  { prompt: 'Check false-positive risk.', icon: ShieldAlert },
-  { prompt: 'Score evidence quality.', icon: FileQuestion },
+  { prompt: 'Review evidence quality', icon: FileQuestion },
+  { prompt: 'Check false positives', icon: ShieldAlert },
+  { prompt: 'Why did this leakage happen?', icon: Route },
   { prompt: 'Draft reviewer checklist.', icon: ListChecks },
-  { prompt: 'Draft recovery note.', icon: StickyNote }
+  { prompt: 'Draft recovery note', icon: StickyNote }
 ] as const;
 
 export function CopilotSuggestedPrompts({

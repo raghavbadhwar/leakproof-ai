@@ -10,7 +10,7 @@ Product boundary:
 - Code calculates.
 - Human approves.
 
-Finding intelligence is a trust layer, not an automation layer. Copilot can review evidence quality, flag false-positive risk, draft reviewer checklists, prepare CFO summary data, and draft recovery-note text for human review. It cannot change finding amounts, change finding status, approve evidence, mark customer-ready, export reports, send email, create invoices, delete documents, or change roles.
+Finding intelligence is a trust layer, not an automation layer. Copilot can route users to data mapping, missing-data detection, audit readiness, next-best-action guidance, evidence quality review, false-positive review, contract hierarchy resolution, recovery note drafts, CFO summaries, root-cause classification, and prevention recommendations. It cannot change finding amounts, change finding status, approve evidence, mark customer-ready, export reports, send email, create invoices, delete documents, or change roles.
 
 Confirmed actions execute only through existing API routes/helpers and re-check auth, role, workspace scope, blockers, evidence gates, report rules, and audit logging before any mutation.
 
@@ -76,6 +76,7 @@ Allowed pending and executable action types:
 - `prepare_approve_evidence`
 - `prepare_assign_reviewer`
 - `prepare_recovery_note`
+- `prepare_contract_hierarchy_resolution`
 
 Statuses are `pending`, `confirmed`, `executed`, `cancelled`, `failed`, and `expired`. Risk levels are `low`, `medium`, `high`, and `critical`.
 
@@ -95,6 +96,8 @@ Supported controlled execution:
 - `prepare_update_finding_status`: high risk for `approved`, `customer_ready`, and `recovered`. It uses existing status-transition validation and blocks money findings without approved evidence.
 - `prepare_assign_reviewer`: owner/admin only. It verifies the assignee belongs to the organization with a reviewer/admin/owner role before assignment.
 - `prepare_generate_report_draft`: requires reviewer/admin/owner role and uses existing report generation rules. Draft and `needs_review` findings remain excluded from customer-facing reports; approved evidence rules remain unchanged.
+- `prepare_recovery_note`: requires reviewer/admin/owner role and calls the existing recovery-note route after confirmation. The route may persist a draft if the optional draft table exists, but it never sends email, creates invoices, or exports reports.
+- `prepare_contract_hierarchy_resolution`: requires reviewer/admin/owner role and calls the existing contract hierarchy resolver after confirmation. It may refresh safe relationship rows and mark non-approved conflicts for review, but approved terms are not auto-approved, replaced, or used to calculate leakage without human review.
 
 Forbidden or prepare-only execution:
 
@@ -111,6 +114,12 @@ The system prompt identifies Gemini as LeakProof Copilot, a finance audit assist
 
 Customer-facing leakage is strictly `approved`, `customer_ready`, and `recovered`. `draft` and `needs_review` are internal pipeline exposure and must not be combined into customer-facing totals.
 
+## Shared AI Foundation
+
+Future Copilot AI features should register their task type in `src/lib/ai/tasks.ts`, validate output with `src/lib/ai/resultSchema.ts`, apply redaction and raw-source checks from `src/lib/ai/safety.ts`, reuse `src/lib/ai/promptRules.ts`, and record only safe AI audit metadata through `src/lib/audit/aiEvents.ts`.
+
+These shared modules do not execute individual AI features by themselves. They define the reusable safety boundary for later tasks: advisory output only, deterministic money from code, human approval before any mutation or customer-facing action.
+
 ## Read-Only Tools
 
 - `getWorkspaceSummary`
@@ -119,15 +128,40 @@ Customer-facing leakage is strictly `approved`, `customer_ready`, and `recovered
 - `getFindingDetail`
 - `checkReportReadiness`
 - `detectMissingData`
+- `dataMappingAssistant`
+- `missingDataDetector`
+- `auditReadinessScore`
+- `nextBestAction`
 - `prepareCfoSummaryData`
 - `explainFindingFormulaDeterministic`
 - `evidenceQualityReview`
+- `evidenceQualityScorer`
 - `falsePositiveRiskCheck`
+- `falsePositiveCritic`
 - `reviewerChecklist`
 - `prepareCfoSummary`
+- `cfoSummaryGenerator`
 - `prepareRecoveryNote`
+- `recoveryNoteGenerator`
+- `contractHierarchyResolver`
+- `rootCauseClassifier`
+- `preventionRecommendations`
 
 Gemini may explain these outputs, but it does not calculate leakage amounts. Amounts returned to the UI come from tool output.
+
+Feature-specific Copilot commands:
+
+- “Map this CSV” or “Map uploaded CSV” routes to the data mapping assistant. Copilot does not invent a mapping if CSV headers and safe sample shapes are missing.
+- “What data is missing?” routes to missing-data detection.
+- “Is the audit ready?” routes to deterministic audit readiness scoring.
+- “What should I do next?” routes to deterministic next-best-action guidance.
+- “Check evidence quality” routes to the evidence quality scorer for the selected finding.
+- “Check false positives” routes to the false-positive critic for the selected finding.
+- “Resolve contract hierarchy” prepares a confirmation-gated action for the existing contract hierarchy resolver.
+- “Draft recovery note” prepares advisory draft content and a confirmation-gated action before persistence.
+- “Prepare CFO summary” routes to the CFO summary generator with customer-facing and internal exposure kept separate.
+- “Why did this leakage happen?” routes to root-cause classification for the selected finding.
+- “Show prevention recommendations” routes to workspace root-cause analytics and prevention recommendations.
 
 ## Finding Intelligence
 
@@ -145,10 +179,20 @@ Contextual finding prompts in the Copilot panel:
 
 - Explain this finding.
 - Explain formula.
-- Check false-positive risk.
-- Score evidence quality.
+- Review evidence quality.
+- Check false positives.
+- Why did this leakage happen?
 - Draft reviewer checklist.
 - Draft recovery note.
+
+Workspace prompts in the Copilot panel:
+
+- Map uploaded CSV.
+- Find missing data.
+- Check report readiness.
+- What should I do next?
+- Prepare CFO summary.
+- Explain root causes.
 
 ## Security Model
 

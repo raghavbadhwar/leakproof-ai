@@ -19,13 +19,24 @@ export const copilotToolNameSchema = z.enum([
   'getFindingDetail',
   'checkReportReadiness',
   'detectMissingData',
+  'dataMappingAssistant',
+  'missingDataDetector',
+  'auditReadinessScore',
+  'nextBestAction',
   'prepareCfoSummaryData',
   'explainFindingFormulaDeterministic',
   'evidenceQualityReview',
+  'evidenceQualityScorer',
   'falsePositiveRiskCheck',
+  'falsePositiveCritic',
   'reviewerChecklist',
   'prepareCfoSummary',
-  'prepareRecoveryNote'
+  'cfoSummaryGenerator',
+  'prepareRecoveryNote',
+  'recoveryNoteGenerator',
+  'contractHierarchyResolver',
+  'rootCauseClassifier',
+  'preventionRecommendations'
 ]);
 
 export const confidenceBucketSchema = z.enum(['low', 'medium', 'high']);
@@ -39,7 +50,8 @@ export const copilotActionTypeSchema = z.enum([
   'prepare_update_finding_status',
   'prepare_approve_evidence',
   'prepare_assign_reviewer',
-  'prepare_recovery_note'
+  'prepare_recovery_note',
+  'prepare_contract_hierarchy_resolution'
 ]);
 
 export const copilotActionStatusSchema = z.enum([
@@ -72,7 +84,41 @@ export const getFindingDetailInputSchema = copilotToolBaseInputSchema.extend({
   finding_id: uuidSchema
 });
 
+export const optionalFindingInputSchema = copilotToolBaseInputSchema.extend({
+  finding_id: uuidSchema.optional()
+});
+
 export const explainFindingFormulaInputSchema = getFindingDetailInputSchema;
+
+export const copilotFeatureRouteSchema = z.object({
+  method: z.enum(['GET', 'POST']),
+  path: z.string().trim().min(1).max(260),
+  execution: z.enum(['direct_read_only', 'pending_action_required', 'requires_input']),
+  required_role: z.enum(['member', 'reviewer']).nullable()
+}).strict();
+
+export const copilotFeatureIntegrationSchema = z.object({
+  feature: z.enum([
+    'data_mapping',
+    'missing_data_detection',
+    'audit_readiness',
+    'next_best_action',
+    'evidence_quality_review',
+    'false_positive_review',
+    'contract_hierarchy_resolution',
+    'recovery_note_draft',
+    'cfo_summary_draft',
+    'root_cause_classification',
+    'prevention_recommendations'
+  ]),
+  route: copilotFeatureRouteSchema,
+  advisory_only: z.literal(true),
+  code_calculates_money: z.literal(true),
+  human_approval_required: z.literal(true),
+  mutating_actions_require_confirmation: z.literal(true),
+  customer_facing_rules_preserved: z.literal(true),
+  warnings: z.array(z.string().trim().min(1).max(500)).max(12).default([])
+}).strict();
 
 export const evidenceQualityReviewSchema = z.object({
   finding_id: uuidSchema,
@@ -146,10 +192,16 @@ export const copilotAnswerTypeSchema = z.enum([
   'evidence_review',
   'report_readiness',
   'missing_data',
+  'data_mapping',
+  'audit_readiness',
+  'next_best_action',
   'false_positive_risk',
   'reviewer_checklist',
   'cfo_summary',
-  'recovery_note'
+  'recovery_note',
+  'contract_hierarchy',
+  'root_cause',
+  'prevention_recommendations'
 ]);
 
 export const copilotSuggestedActionSchema = z.object({
@@ -201,6 +253,7 @@ export type CopilotActionRiskLevel = z.infer<typeof copilotActionRiskLevelSchema
 export type CopilotToolBaseInput = z.infer<typeof copilotToolBaseInputSchema>;
 export type GetFindingsInput = z.input<typeof getFindingsInputSchema>;
 export type GetFindingDetailInput = z.infer<typeof getFindingDetailInputSchema>;
+export type OptionalFindingInput = z.infer<typeof optionalFindingInputSchema>;
 export type ExplainFindingFormulaInput = z.infer<typeof explainFindingFormulaInputSchema>;
 export type EvidenceQualityReview = z.infer<typeof evidenceQualityReviewSchema>;
 export type FalsePositiveRiskCheck = z.infer<typeof falsePositiveRiskCheckSchema>;

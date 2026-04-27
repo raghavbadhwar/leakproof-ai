@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cfoSummarySchema,
+  copilotFeatureIntegrationSchema,
   copilotRequestSchema,
   copilotResponseSchema,
   evidenceQualityReviewSchema,
@@ -45,6 +46,30 @@ describe('Copilot schemas', () => {
 
     expect(response.routed_tool_names).toEqual(['falsePositiveRiskCheck']);
     expect(response.answer_type).toBe('false_positive_risk');
+  });
+
+  it('validates feature-specific Copilot route metadata', () => {
+    const route = copilotFeatureIntegrationSchema.parse({
+      feature: 'recovery_note_draft',
+      route: {
+        method: 'POST',
+        path: `/api/findings/${findingId}/recovery-note`,
+        execution: 'pending_action_required',
+        required_role: 'reviewer'
+      },
+      advisory_only: true,
+      code_calculates_money: true,
+      human_approval_required: true,
+      mutating_actions_require_confirmation: true,
+      customer_facing_rules_preserved: true,
+      warnings: ['Human confirmation is required before persistence.']
+    });
+
+    expect(route.route.execution).toBe('pending_action_required');
+    expect(() => copilotFeatureIntegrationSchema.parse({
+      ...route,
+      mutating_actions_require_confirmation: false
+    })).toThrow();
   });
 
   it('requires advisory-only semantics for intelligence outputs', () => {

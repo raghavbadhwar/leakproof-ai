@@ -88,6 +88,11 @@ describe('audit event helpers', () => {
     expect(shouldWriteAuditEvent('member_removed')).toBe(true);
     expect(shouldWriteAuditEvent('member_role_changed')).toBe(true);
     expect(shouldWriteAuditEvent('finding_assigned')).toBe(true);
+    expect(shouldWriteAuditEvent('ai.task_started')).toBe(true);
+    expect(shouldWriteAuditEvent('ai.task_completed')).toBe(true);
+    expect(shouldWriteAuditEvent('ai.task_failed')).toBe(true);
+    expect(shouldWriteAuditEvent('ai.output_rejected')).toBe(true);
+    expect(shouldWriteAuditEvent('ai.safety_blocked')).toBe(true);
     expect(shouldWriteAuditEvent('view.loaded')).toBe(false);
   });
 });

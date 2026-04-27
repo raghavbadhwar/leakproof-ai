@@ -17,13 +17,19 @@ const SENSITIVE_KEY_PATTERN =
 
 export function summarizeCopilotUserMessageForStorage(message: string): string {
   const normalized = message.toLowerCase();
+  if (/\b(map|mapping|csv|columns?|headers?)\b/.test(normalized)) {
+    return 'User asked for data mapping assistance.';
+  }
   if (/\b(total|sum|amount|leakage|recoverable|recovered|prevented)\b/.test(normalized)) {
     return 'User asked for read-only leakage analytics.';
+  }
+  if (/\b(next best action|what should i do next|next step)\b/.test(normalized)) {
+    return 'User asked for deterministic next-best-action guidance.';
   }
   if (/\b(needs? review|review burden|pending review|draft)\b/.test(normalized)) {
     return 'User asked for read-only review queue context.';
   }
-  if (/\b(report ready|ready for report|export ready|can.*report)\b/.test(normalized)) {
+  if (/\b(report ready|ready for report|export ready|can.*report|audit ready|readiness)\b/.test(normalized)) {
     return 'User asked for read-only report readiness.';
   }
   if (/\b(missing|upload|data gap|incomplete|no contract|no invoice|no usage)\b/.test(normalized)) {
@@ -34,6 +40,9 @@ export function summarizeCopilotUserMessageForStorage(message: string): string {
   }
   if (/\b(evidence quality|false[- ]?positive|reviewer checklist|recovery note)\b/.test(normalized)) {
     return 'User asked for advisory finding intelligence.';
+  }
+  if (/\b(contract hierarchy|root cause|prevention|prevent|why did.*leak)\b/.test(normalized)) {
+    return 'User asked for advisory AI feature guidance.';
   }
   if (/\b(cfo|executive|summary)\b/.test(normalized)) {
     return 'User asked for safe CFO summary data.';

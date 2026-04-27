@@ -22,9 +22,27 @@ type InvoicePaymentTermsEvidence = {
 
 const APPROVED_STATUSES: Array<ContractTerm['reviewStatus']> = ['approved', 'edited'];
 const MS_PER_DAY = 86_400_000;
+const CONFLICT_REVIEW_TERM_TYPES = new Set<ContractTerm['type']>([
+  'contract_end_date',
+  'renewal_term',
+  'notice_period',
+  'base_fee',
+  'billing_frequency',
+  'minimum_commitment',
+  'committed_seats',
+  'seat_price',
+  'usage_allowance',
+  'overage_price',
+  'discount',
+  'discount_expiry',
+  'annual_uplift',
+  'payment_terms',
+  'special_billing_note'
+]);
 
 function approvedTerm<T>(terms: ContractTerm[], customerId: string, type: ContractTerm['type']): (ContractTerm & { value: T }) | undefined {
-  return terms.find((term) => term.customerId === customerId && term.type === type && APPROVED_STATUSES.includes(term.reviewStatus)) as
+  const matches = terms.filter((term) => term.customerId === customerId && term.type === type && APPROVED_STATUSES.includes(term.reviewStatus));
+  return selectControllingApprovedTerm(matches) as
     | (ContractTerm & { value: T })
     | undefined;
 }
@@ -500,6 +518,34 @@ export function findAmendmentConflict(input: {
   customerId: string;
   terms: ContractTerm[];
 }): LeakageFinding | null {
+  const directConflict = firstApprovedTermConflict(input.terms, input.customerId);
+  if (directConflict) {
+    return {
+      id: `finding_amendment_${input.customerId}_${directConflict.termType}`,
+      customerId: input.customerId,
+      type: 'amendment_conflict',
+      title: 'Potential contract hierarchy conflict requires human review',
+      summary: directConflict.selected
+        ? `Multiple approved ${directConflict.termType.replaceAll('_', ' ')} terms conflict. A later or higher-precedence term is recommended, but a reviewer must confirm.`
+        : `Multiple approved ${directConflict.termType.replaceAll('_', ' ')} terms conflict without a clear controlling source.`,
+      outcomeType: 'risk_alert',
+      estimatedAmount: {
+        amountMinor: 0,
+        currency: 'USD'
+      },
+      confidence: directConflict.selected ? 0.78 : 0.7,
+      status: 'needs_review',
+      calculation: {
+        formula: 'compare_active_contract_terms_for_precedence',
+        conflictingTermType: directConflict.termType,
+        conflictingTermIds: directConflict.terms.map((term) => term.id),
+        recommendedControllingTermId: directConflict.selected?.id,
+        financeAssumption: 'Contract hierarchy conflicts must be resolved by a reviewer before customer-facing use.'
+      },
+      citations: directConflict.terms.map((term) => term.citation)
+    };
+  }
+
   const amendment = approvedTerm<{ supersedes?: string; effectiveDate?: string }>(input.terms, input.customerId, 'amendment');
   if (!amendment?.value.supersedes) return null;
 
@@ -563,6 +609,124 @@ function isReportableFinding(finding: LeakageFinding): boolean {
     finding.estimatedAmount.amountMinor > 0 &&
     finding.citations.some((citation) => citation.sourceType === 'invoice' || citation.sourceType === 'usage')
   );
+}
+
+function firstApprovedTermConflict(
+  terms: ContractTerm[],
+  customerId: string
+): { termType: ContractTerm['type']; terms: ContractTerm[]; selected: ContractTerm | undefined } | null {
+  const approvedTerms = terms.filter(
+    (term) => term.customerId === customerId && APPROVED_STATUSES.includes(term.reviewStatus) && CONFLICT_REVIEW_TERM_TYPES.has(term.type)
+  );
+  const grouped = new Map<ContractTerm['type'], ContractTerm[]>();
+  for (const term of approvedTerms) {
+    grouped.set(term.type, [...(grouped.get(term.type) ?? []), term]);
+  }
+
+  for (const [termType, termGroup] of grouped.entries()) {
+    if (termGroup.length < 2 || distinctComparableTermValues(termGroup).size < 2) continue;
+    return {
+      termType,
+      terms: termGroup,
+      selected: selectControllingApprovedTerm(termGroup)
+    };
+  }
+
+  return null;
+}
+
+function selectControllingApprovedTerm<Term extends ContractTerm>(terms: Term[]): Term | undefined {
+  if (terms.length === 0) return undefined;
+  if (terms.length === 1) return terms[0];
+
+  const ranked = terms
+    .map((term) => {
+      const effectiveDate = termEffectiveDate(term);
+      return {
+        term,
+        roleRank: termDocumentRoleRank(term),
+        effectiveTime: effectiveDate ? Date.parse(`${effectiveDate}T00:00:00Z`) : null,
+        confidence: term.confidence
+      };
+    })
+    .sort((left, right) =>
+      right.roleRank - left.roleRank ||
+      (right.effectiveTime ?? -1) - (left.effectiveTime ?? -1) ||
+      right.confidence - left.confidence ||
+      left.term.id.localeCompare(right.term.id)
+    );
+
+  const top = ranked[0];
+  const second = ranked[1];
+  if (!top) return undefined;
+  if (!second || distinctComparableTermValues(terms).size === 1) return top.term;
+
+  const hasClearRolePrecedence = top.roleRank > second.roleRank && top.roleRank > 0;
+  const hasClearLaterDate = top.effectiveTime !== null && second.effectiveTime !== null && top.effectiveTime > second.effectiveTime;
+  return hasClearRolePrecedence || hasClearLaterDate ? top.term : undefined;
+}
+
+function distinctComparableTermValues(terms: ContractTerm[]): Set<string> {
+  return new Set(terms.map((term) => stableStringify(comparableTermValue(term.value))));
+}
+
+function comparableTermValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(comparableTermValue);
+  if (!value || typeof value !== 'object') return value;
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !['effectiveDate', 'effective_date', 'documentRole', 'document_role', 'sourceDocumentRole'].includes(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nestedValue]) => [key, comparableTermValue(nestedValue)])
+  );
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nestedValue]) => `${JSON.stringify(key)}:${stableStringify(nestedValue)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function termEffectiveDate(term: ContractTerm): string | null {
+  return firstIsoDate(
+    readStringField(term.value, 'effectiveDate'),
+    readStringField(term.value, 'effective_date'),
+    readStringField(term.value, 'startDate'),
+    readStringField(term.value, 'validFrom')
+  );
+}
+
+function termDocumentRoleRank(term: ContractTerm): number {
+  const role = (
+    readStringField(term.value, 'documentRole') ??
+    readStringField(term.value, 'document_role') ??
+    readStringField(term.value, 'sourceDocumentRole')
+  )?.toLowerCase();
+  if (role === 'amendment') return 70;
+  if (role === 'discount_approval') return 65;
+  if (role === 'renewal_order') return 60;
+  if (role === 'order_form') return 50;
+  if (role === 'side_letter') return 40;
+  if (role === 'pricing_schedule') return 30;
+  if (role === 'statement_of_work') return 20;
+  if (role === 'master_agreement') return 10;
+  return 0;
+}
+
+function readStringField(value: unknown, key: string): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'string' ? field : null;
+}
+
+function firstIsoDate(...values: Array<string | null>): string | null {
+  return values.find((value): value is string => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value))) ?? null;
 }
 
 function billingFrequencyFor(

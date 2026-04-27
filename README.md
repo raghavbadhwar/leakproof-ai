@@ -20,7 +20,15 @@ Risk-only findings, such as renewal notice or payment terms risks, may use appro
 
 ## Current Build Status
 
-The repository contains a production-shaped Next.js, Supabase, Gemini, and pgvector build. Treat it as **repo-side ready** and a **pre-production candidate** until the live Supabase, Gemini, Vercel, mock-audit, smoke, and role QA checks pass.
+The repository contains a production-shaped Next.js, Supabase, Gemini, and pgvector build.
+
+Current posture:
+
+- Repo-side gates passed.
+- Verdict: pilot-ready after live setup.
+- Production status: not production-ready until live verification passes.
+
+Treat it as **repo-side ready** and a **pre-production candidate** until the live Supabase, Gemini, Vercel, mock-audit, smoke, and role QA checks pass.
 
 Ready locally:
 
@@ -55,7 +63,7 @@ Still requires live external setup:
 - `pnpm production:gate` with real production values.
 - Deployed smoke test.
 - Mock audit verification that the fixture totals `USD 26,690`.
-- Real browser verification with owner/admin/reviewer/viewer users.
+- Real browser verification with owner/admin/reviewer/member/viewer users.
 
 ## Tech Stack
 
@@ -222,6 +230,7 @@ LeakProof AI handles sensitive contracts and invoices, so the build follows thes
 - `docs/SECURITY_REVIEW.md`: security pass and live verification checklist.
 - `docs/DEPLOYMENT.md`: Vercel and Supabase deployment steps.
 - `docs/ENV_CHECKLIST.md`: required env vars and production gate.
+- `docs/LIVE_PILOT_READINESS_RUNBOOK.md`: exact live pilot checklist for Supabase, Vercel, personas, mock audit, Gemini, and audit logs.
 - `docs/SCANNED_PDF_IMAGE_INGESTION_STRATEGY.md`: scanned PDF/image strategy.
 - `docs/FOUNDER_HANDOFF.md`: non-technical founder handoff.
 - `docs/REPOSITORY_GUIDE.md`: detailed repository guide.
@@ -230,14 +239,16 @@ LeakProof AI handles sensitive contracts and invoices, so the build follows thes
 
 Release posture:
 
-- Repo-side status: pre-production candidate.
+- Repo-side status: gates passed.
+- Pilot status: pilot-ready after live setup.
+- Production status: not production-ready until live verification passes.
 - Required local release gate: `pnpm production:gate` after real env vars are available.
 - Required deployed smoke: `APP_URL=<production-url> pnpm smoke`.
 - Required mock audit: verify the mock pilot total is `USD 26,690`.
-- Required live QA: owner/admin/reviewer/viewer role checks against real Supabase Auth.
+- Required live QA: owner/admin/reviewer/member/viewer role checks against real Supabase Auth.
 - Environment status depends on the local shell or pulled Vercel env files; `pnpm env:check` must pass with real values before production gating.
 
-Do not call production complete until the live workflow, deployed smoke, mock audit, and role QA checks have passed.
+Do not call production complete until live verification passes: Supabase migrations/RLS/storage, Vercel deploy, deployed smoke, mock audit, Gemini smoke, audit-log inspection, and owner/admin/reviewer/member/viewer role QA.
 
 ## How To Read This Repo
 

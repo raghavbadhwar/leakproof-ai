@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { uploadMetadataSchema } from '@/lib/api/schemas';
 import { handleApiError, jsonError } from '@/lib/api/responses';
+import { confirmedDataMappingSchema, type DataMappingDocumentType } from '@/lib/ai/dataMappingSchema';
 import { writeAuditEvent } from '@/lib/db/audit';
 import { requireWorkspaceRole } from '@/lib/db/auth';
 import { findOrCreateCustomer, resolveCustomerForUpload } from '@/lib/db/customers';
@@ -10,6 +11,7 @@ import { REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { chunkCsvRows, chunkTextDocument, type DocumentChunk } from '@/lib/ingest/chunking';
 import { parseCustomerCsv, parseInvoiceCsv, parseUsageCsv } from '@/lib/ingest/csv';
+import { applyCsvMappingToCanonicalCsv, DataMappingValidationError } from '@/lib/ingest/csvMapping';
 import { extractDocumentText, isLowConfidenceScannedExtractionError, type ExtractedDocumentText } from '@/lib/ingest/documentText';
 import { buildTenantStoragePath, validateUpload } from '@/lib/uploads/validation';
 
@@ -57,6 +59,17 @@ export async function POST(request: Request) {
     if (!validation.ok) {
       return jsonError(validation.reason, 400);
     }
+    const rawContent = bytes.toString('utf8');
+    const confirmedMapping = parseConfirmedMapping(form.get('confirmed_mapping'), metadata.document_type);
+    const mappedCsv =
+      confirmedMapping && isCsvDocumentType(metadata.document_type)
+        ? applyCsvMappingToCanonicalCsv({
+            csv: rawContent,
+            documentType: metadata.document_type,
+            mapping: confirmedMapping
+          }).csv
+        : null;
+    const contentForProcessing = mappedCsv ?? rawContent;
 
     const supabase = createSupabaseServiceClient();
     const storagePath = buildTenantStoragePath({
@@ -128,13 +141,13 @@ export async function POST(request: Request) {
       documentType: metadata.document_type,
       fileName: file.name,
       mimeType: file.type,
-      content: extractedContractText?.text ?? bytes.toString('utf8'),
+      content: extractedContractText?.text ?? contentForProcessing,
       extractedContractText
     });
     await insertDocumentChunks(supabase, chunks);
 
     if (metadata.document_type === 'invoice_csv') {
-      const records = parseInvoiceCsv(bytes.toString('utf8'), { sourceDocumentId: document.id, workspaceId: metadata.workspace_id });
+      const records = parseInvoiceCsv(contentForProcessing, { sourceDocumentId: document.id, workspaceId: metadata.workspace_id });
       await ingestInvoiceRecords(supabase, {
         organizationId: metadata.organization_id,
         workspaceId: metadata.workspace_id,
@@ -144,7 +157,7 @@ export async function POST(request: Request) {
     }
 
     if (metadata.document_type === 'usage_csv') {
-      const records = parseUsageCsv(bytes.toString('utf8'), { sourceDocumentId: document.id, workspaceId: metadata.workspace_id });
+      const records = parseUsageCsv(contentForProcessing, { sourceDocumentId: document.id, workspaceId: metadata.workspace_id });
       await ingestUsageRecords(supabase, {
         organizationId: metadata.organization_id,
         workspaceId: metadata.workspace_id,
@@ -154,7 +167,7 @@ export async function POST(request: Request) {
     }
 
     if (metadata.document_type === 'customer_csv') {
-      const records = parseCustomerCsv(bytes.toString('utf8'));
+      const records = parseCustomerCsv(contentForProcessing);
       await ingestCustomerRecords(supabase, {
         organizationId: metadata.organization_id,
         records
@@ -234,8 +247,35 @@ export async function POST(request: Request) {
     if (error instanceof UploadResponseError) {
       return error.response;
     }
+    if (error instanceof DataMappingValidationError) {
+      return jsonError(error.message, 400);
+    }
     return handleApiError(error);
   }
+}
+
+function parseConfirmedMapping(value: FormDataEntryValue | null, documentType: string) {
+  if (!value) return null;
+  if (!isCsvDocumentType(documentType)) {
+    throw new UploadResponseError(jsonError('Column mappings can only be attached to CSV uploads.', 400));
+  }
+  if (typeof value !== 'string') {
+    throw new UploadResponseError(jsonError('Confirmed mapping must be JSON.', 400));
+  }
+  try {
+    const parsed = confirmedDataMappingSchema.parse(JSON.parse(value));
+    if (parsed.document_type !== documentType) {
+      throw new UploadResponseError(jsonError('Confirmed mapping document type does not match the upload.', 400));
+    }
+    return parsed;
+  } catch (error) {
+    if (error instanceof UploadResponseError) throw error;
+    throw new UploadResponseError(jsonError('Confirmed mapping is invalid.', 400));
+  }
+}
+
+function isCsvDocumentType(documentType: string): documentType is DataMappingDocumentType {
+  return documentType === 'invoice_csv' || documentType === 'usage_csv' || documentType === 'customer_csv';
 }
 
 function buildChunksForUploadedDocument(input: {
