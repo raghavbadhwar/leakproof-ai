@@ -60,6 +60,7 @@ import { createSupabaseBrowserClient } from '@/lib/db/supabaseBrowser';
 import type { AnalyticsPoint, WorkspaceAnalyticsPayload } from '@/lib/analytics/workspaceAnalytics';
 import { isCustomerFacingFindingStatus } from '@/lib/analytics/statuses';
 import { AppShell } from '@/components/layout/AppShell';
+import { ExecutiveReportPreview, type ExecutiveReportViewData } from '@/components/report/ExecutiveReportPreview';
 import { ChartCardShell as ChartCard } from '@/components/ui/chart-card-shell';
 import { DataTable } from '@/components/ui/data-table';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -67,7 +68,6 @@ import { EvidencePanel } from '@/components/ui/evidence-panel';
 import { FormulaBlock } from '@/components/ui/formula-block';
 import { KpiCard as Metric } from '@/components/ui/kpi-card';
 import { LoadingSkeleton } from '@/components/ui/loading-skeleton';
-import { ReportSection } from '@/components/ui/report-section';
 import { ReviewDrawer } from '@/components/ui/review-drawer';
 import { StatusPill as StatusBadge } from '@/components/ui/status-pill';
 
@@ -217,29 +217,7 @@ type SearchResult = {
   similarity: number;
 };
 
-type ExecutiveReport = {
-  organizationName: string;
-  workspaceName: string;
-  generatedAt: string;
-  totalPotentialLeakageMinor: number;
-  totalApprovedRecoverableMinor: number;
-  totalPreventedLeakageMinor: number;
-  totalRiskOnlyItems: number;
-  findingsByCategory: Record<string, number>;
-  findingsByStatus: Record<string, number>;
-  topFindings: Array<{
-    id: string;
-    title: string;
-    findingType: string;
-    outcomeType: string;
-    status: string;
-    amountMinor: number;
-    currency: string;
-    confidence: number;
-  }>;
-  methodologyNote: string;
-  currency: string;
-};
+type ExecutiveReport = ExecutiveReportViewData;
 
 type WorkspaceSnapshot = {
   documents: SourceDocument[];
@@ -955,9 +933,29 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     if (findingId === selectedFindingId) await refreshFindingDetail(activeSession, selectedOrgId, findingId);
   }
 
+  async function generateReport() {
+    if (!selectedOrgId || !selectedWorkspaceId) {
+      setError('Select a workspace before generating a report.');
+      return;
+    }
+
+    const activeSession = requireActiveSession();
+    const payload = await apiFetch<{ report: ExecutiveReport; evidence_pack_id: string | null }>(
+      activeSession,
+      `/api/workspaces/${selectedWorkspaceId}/report`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ organization_id: selectedOrgId })
+      }
+    );
+    setReport(payload.report);
+    setReportPackId(payload.evidence_pack_id ?? '');
+    setMessage(payload.evidence_pack_id ? 'Executive report generated.' : 'Report preview generated. Export is blocked until approved findings have approved evidence.');
+  }
+
   async function exportReport(format: 'print_pdf' | 'json' | 'clipboard') {
-    if (!report || !reportPackId) {
-      setError('Generate a customer-ready report first.');
+    if (!report || !reportPackId || !report.exportability?.exportable) {
+      setError('Report is not exportable yet. Approve customer-facing findings and evidence first.');
       return;
     }
 
@@ -1113,7 +1111,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     }
 
     logStep('Generating report draft from approved findings.');
-    const reportPayload = await apiFetch<{ report: ExecutiveReport; evidence_pack_id: string }>(
+    const reportPayload = await apiFetch<{ report: ExecutiveReport; evidence_pack_id: string | null }>(
       activeSession,
       `/api/workspaces/${selectedWorkspaceId}/report`,
       {
@@ -1123,7 +1121,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     );
 
     setReport(reportPayload.report);
-    setReportPackId(reportPayload.evidence_pack_id);
+    setReportPackId(reportPayload.evidence_pack_id ?? '');
     setSearchResults(latestResults);
     await refreshWorkspaceData(activeSession, selectedOrgId, selectedWorkspaceId);
     setMessage('Autonomous audit finished. Review the terms, evidence, findings, and report before using anything with a customer.');
@@ -2065,59 +2063,16 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
             ]} currency={displayCurrency} /></ChartCard>
             <ChartCard title="Status summary" scope="Needs finance review"><BarChartPanel points={reviewBurdenAnalytics?.allStatuses ?? []} /></ChartCard>
           </section>
-          <div className="report-layout">
-            <div>
-              <ReportSection
-                title="Executive summary"
-                detail="This report is presentation-ready for CFO and founder review. Totals exclude draft, needs-review, dismissed, and not-recoverable findings."
-              >
-              <RankedList points={customerFacingAnalytics?.byCategory ?? []} currency={displayCurrency} />
-              </ReportSection>
-              <ReportSection title="High-priority actions">
-              <ActionList findings={approvedFindings.length > 0 ? approvedFindings : findings} />
-              </ReportSection>
-            </div>
-            <div>
-              <h3>Approval controls</h3>
-              <p className="muted">Customer-facing messages and invoice notes remain drafts until the finding is approved and reviewed for customer use.</p>
-	              {report ? (
-	                <div className="report-totals">
-	                  <p><strong>{report.organizationName}</strong> / {report.workspaceName}</p>
-	                  <p><strong>Total potential:</strong> {formatMoney(report.totalPotentialLeakageMinor, report.currency)}</p>
-	                  <p><strong>Approved recoverable:</strong> {formatMoney(report.totalApprovedRecoverableMinor, report.currency)}</p>
-	                  <p><strong>Prevented future leakage:</strong> {formatMoney(report.totalPreventedLeakageMinor, report.currency)}</p>
-	                  <p><strong>Risk-only items:</strong> {report.totalRiskOnlyItems}</p>
-	                  {report.topFindings.length > 0 ? (
-	                    <ol className="report-list">
-	                      {report.topFindings.map((finding) => (
-	                        <li key={finding.id}>{finding.title} - {formatMoney(finding.amountMinor, finding.currency)}</li>
-	                      ))}
-	                    </ol>
-	                  ) : <p className="muted">Approve findings before creating a customer-ready report.</p>}
-	                  <p className="muted">{report.methodologyNote}</p>
-	                </div>
-	              ) : null}
-              <button
-                onClick={() => {
-                  if (!selectedOrgId || !selectedWorkspaceId) return setError('Select a workspace before generating a report.');
-                  runTask(async () => {
-                    const payload = await apiFetch<{ report: ExecutiveReport; evidence_pack_id: string }>(session, `/api/workspaces/${selectedWorkspaceId}/report`, {
-                      method: 'POST',
-                      body: JSON.stringify({ organization_id: selectedOrgId })
-                    });
-                    setReport(payload.report);
-                    setReportPackId(payload.evidence_pack_id);
-                    setMessage('Executive report generated.');
-                  });
-                }}
-              >
-	                <FileText size={16} /> Generate customer-ready report
-	              </button>
-	              <button className="secondary-button" onClick={() => runTask(() => exportReport('clipboard'))}><ClipboardCheck size={16} /> Copy report</button>
-	              <button className="secondary-button" onClick={() => runTask(() => exportReport('json'))}><Download size={16} /> Download JSON</button>
-	              <button className="secondary-button" onClick={() => runTask(() => exportReport('print_pdf'))}><Printer size={16} /> Export PDF</button>
-            </div>
-          </div>
+          <ExecutiveReportPreview
+            report={report}
+            reportPackId={reportPackId}
+            approvedFindingCount={approvedFindings.length}
+            isBusy={isPending}
+            onGenerate={() => runTask(generateReport)}
+            onCopy={() => runTask(() => exportReport('clipboard'))}
+            onDownloadJson={() => runTask(() => exportReport('json'))}
+            onExportPdf={() => runTask(() => exportReport('print_pdf'))}
+          />
         </section>
         ) : null}
 
@@ -2405,29 +2360,6 @@ function StatusSegments({ points }: { points: AnalyticsPoint[] }) {
         ))}
       </div>
     </div>
-  );
-}
-
-function ActionList({ findings }: { findings: FindingRow[] }) {
-  const topFindings = findings
-    .slice()
-    .sort((a, b) => b.estimated_amount_minor - a.estimated_amount_minor)
-    .slice(0, 5);
-
-  if (topFindings.length === 0) {
-    return <EmptyState title="No approved actions yet" detail="Approve findings before the report can list customer-ready recovery actions." compact />;
-  }
-
-  return (
-    <ol className="action-list">
-      {topFindings.map((finding) => (
-        <li key={finding.id}>
-          <strong>{finding.title}</strong>
-          <span>{finding.recommended_action ?? 'Review evidence and decide the next customer-safe action.'}</span>
-          <em>{formatMoney(finding.estimated_amount_minor, finding.currency)}</em>
-        </li>
-      ))}
-    </ol>
   );
 }
 
@@ -2877,13 +2809,60 @@ function downloadJson(value: unknown, fileName: string) {
 }
 
 function reportToText(report: ExecutiveReport): string {
+  const labels = report.displayLabels ?? {
+    customerFacingLeakage: 'Customer-facing leakage',
+    approvedEvidenceOnly: 'Approved evidence only',
+    humanReviewed: 'Human reviewed',
+    generatedAt: 'Generated at',
+    includedStatuses: 'Included statuses'
+  };
+  const topFindingLines = report.topFindings.length > 0
+    ? report.topFindings.map((finding, index) => `${index + 1}. ${finding.title} - ${formatMoney(finding.amountMinor, finding.currency)} (${formatReportLabel(finding.status)})`)
+    : ['No findings passed export readiness.'];
+  const customerLines = (report.customerBreakdown ?? []).map((row) => `- ${formatReportLabel(row.label)}: ${formatMoney(row.amountMinor, report.currency)} across ${row.findingCount} finding${row.findingCount === 1 ? '' : 's'}`);
+  const categoryLines = (report.categoryBreakdown ?? []).map((row) => `- ${formatReportLabel(row.label)}: ${formatMoney(row.amountMinor, report.currency)} across ${row.findingCount} finding${row.findingCount === 1 ? '' : 's'}`);
+  const appendixLines = (report.appendixWithCitations ?? []).flatMap((entry) => [
+    `- ${entry.title}`,
+    ...entry.citations.map((citation) => `  - ${formatReportLabel(citation.sourceType ?? 'source')}: ${citation.label}${citation.excerpt ? ` (${citation.excerpt})` : ''}`)
+  ]);
+
   return [
     `${report.organizationName} - ${report.workspaceName}`,
-    `Total approved recoverable: ${formatMoney(report.totalApprovedRecoverableMinor, report.currency)}`,
-    `Total prevented leakage: ${formatMoney(report.totalPreventedLeakageMinor, report.currency)}`,
-    report.methodologyNote,
+    `${labels.generatedAt}: ${formatReportDateTime(report.generatedAt)}`,
+    `${labels.includedStatuses}: ${(report.metadata?.included_statuses ?? []).map(formatReportLabel).join(', ')}`,
+    `${labels.customerFacingLeakage} / ${labels.approvedEvidenceOnly} / ${labels.humanReviewed}`,
+    '',
+    'Executive summary:',
+    report.executiveSummary?.summary ?? report.methodologyNote,
+    '',
+    `Total recoverable leakage: ${formatMoney(report.totalApprovedRecoverableMinor, report.currency)}`,
+    `Total prevented future leakage: ${formatMoney(report.totalPreventedLeakageMinor, report.currency)}`,
+    `Recovered amount: ${formatMoney(report.totalRecoveredMinor, report.currency)}`,
+    `Risk-only items: ${report.totalRiskOnlyItems}`,
     '',
     'Top findings:',
-    ...report.topFindings.map((finding, index) => `${index + 1}. ${finding.title} - ${formatMoney(finding.amountMinor, finding.currency)}`)
+    ...topFindingLines,
+    '',
+    'Findings by customer:',
+    ...(customerLines.length > 0 ? customerLines : ['No customer breakdown yet.']),
+    '',
+    'Findings by category:',
+    ...(categoryLines.length > 0 ? categoryLines : ['No category breakdown yet.']),
+    '',
+    'Methodology:',
+    ...(report.methodology ?? [report.methodologyNote]).map((item) => `- ${item}`),
+    '',
+    'Appendix with citations:',
+    ...(appendixLines.length > 0 ? appendixLines : ['No approved citations yet.'])
   ].join('\n');
+}
+
+function formatReportLabel(value: string): string {
+  return value
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function formatReportDateTime(value: string): string {
+  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
