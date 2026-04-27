@@ -260,7 +260,25 @@ describe('executive audit report generation', () => {
     expect(report.exportability.blockers).toEqual(['no_approved_findings', 'report_not_exportable_yet']);
     expect(report.exportability.emptyStates.no_approved_findings.title).toBe('No approved findings');
     expect(report.exportability.emptyStates.missing_approved_evidence.title).toBe('Missing approved evidence');
+    expect(report.exportability.emptyStates.mixed_currency_findings.title).toBe('Mixed currencies require separate reports');
     expect(report.exportability.emptyStates.report_not_exportable_yet.title).toBe('Report not exportable yet');
+  });
+
+  it('blocks customer-facing totals when approved findings use mixed currencies', () => {
+    const report = generateExecutiveAuditReport({
+      organizationName: 'Acme Audit Co.',
+      workspaceName: 'Q1 Revenue Leakage Audit',
+      findings: [
+        finding({ id: 'usd', status: 'approved', amountMinor: 100_000, currency: 'USD' }),
+        finding({ id: 'eur', status: 'approved', amountMinor: 90_000, currency: 'EUR' })
+      ]
+    });
+
+    expect(report.exportability.exportable).toBe(false);
+    expect(report.exportability.blockers).toEqual(['mixed_currency_findings', 'report_not_exportable_yet']);
+    expect(report.includedFindingCount).toBe(0);
+    expect(report.totalPotentialLeakageMinor).toBe(0);
+    expect(report.methodologyNote).toContain('do not combine findings across currencies');
   });
 
   it('keeps the top 10 findings concise while the appendix cites every included finding', () => {

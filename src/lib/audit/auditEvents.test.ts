@@ -15,6 +15,10 @@ describe('audit event helpers', () => {
       prompt: 'full prompt',
       api_key: 'secret',
       access_token: 'token',
+      file_name: 'Acme Contract.pdf',
+      storage_path: 'org/workspace/contracts/Acme Contract.pdf',
+      customer_name: 'Acme Cloud',
+      domain: 'acme.example',
       nested: {
         model_output: 'raw model output',
         excerpt: 'raw evidence excerpt',
@@ -38,6 +42,10 @@ describe('audit event helpers', () => {
       prompt: '[redacted]',
       api_key: '[redacted]',
       access_token: '[redacted]',
+      file_name: '[redacted]',
+      storage_path: '[redacted]',
+      customer_name: '[redacted]',
+      domain: '[redacted]',
       nested: {
         model_output: '[redacted]',
         excerpt: '[redacted]',

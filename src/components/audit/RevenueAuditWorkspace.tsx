@@ -596,6 +596,31 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     setAnalytics(payload.analytics);
   }, []);
 
+  const refreshOrganizations = useCallback(async (activeSession: Session) => {
+    const payload = await apiFetch<{ organizations: Array<{ role: OrganizationRole; organization: Omit<Organization, 'role'> | Array<Omit<Organization, 'role'>> }> }>(
+      activeSession,
+      '/api/organizations'
+    );
+    const nextOrganizations = payload.organizations.flatMap((row) => {
+      const organizationsForRow = Array.isArray(row.organization) ? row.organization : [row.organization];
+      return organizationsForRow.filter(Boolean).map((organization) => ({
+        ...organization,
+        role: row.role
+      }));
+    }) as Organization[];
+    setOrganizations(nextOrganizations);
+    setSelectedOrgId((current) => current || nextOrganizations[0]?.id || '');
+  }, []);
+
+  const acceptInvite = useCallback(async (activeSession: Session, inviteToken: string) => {
+    await apiFetch(activeSession, `/api/invites/${inviteToken}/accept`, {
+      method: 'POST'
+    });
+    setMessage('Invite accepted. Organization access is ready.');
+    await refreshOrganizations(activeSession);
+    router.replace('/app/team');
+  }, [refreshOrganizations, router]);
+
   useEffect(() => {
     if (authError) return undefined;
     let mounted = true;
@@ -643,7 +668,7 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     startTransition(() => {
       refreshOrganizations(session).catch(showError);
     });
-  }, [session]);
+  }, [refreshOrganizations, session]);
 
   useEffect(() => {
     if (!session || acceptedInviteTokenRef.current || typeof window === 'undefined') return;
@@ -700,22 +725,6 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
     );
   }
 
-  async function refreshOrganizations(activeSession: Session) {
-    const payload = await apiFetch<{ organizations: Array<{ role: OrganizationRole; organization: Omit<Organization, 'role'> | Array<Omit<Organization, 'role'>> }> }>(
-      activeSession,
-      '/api/organizations'
-    );
-    const nextOrganizations = payload.organizations.flatMap((row) => {
-      const organizationsForRow = Array.isArray(row.organization) ? row.organization : [row.organization];
-      return organizationsForRow.filter(Boolean).map((organization) => ({
-        ...organization,
-        role: row.role
-      }));
-    }) as Organization[];
-    setOrganizations(nextOrganizations);
-    setSelectedOrgId((current) => current || nextOrganizations[0]?.id || '');
-  }
-
   async function refreshMembers(activeSession: Session, organizationId: string) {
     const payload = await apiFetch<{ members: OrganizationMember[] }>(
       activeSession,
@@ -730,15 +739,6 @@ export function RevenueAuditWorkspace({ section = 'overview', findingId }: { sec
       `/api/organizations/${organizationId}/invites`
     );
     setInvites(payload.invites);
-  }
-
-  async function acceptInvite(activeSession: Session, inviteToken: string) {
-    await apiFetch(activeSession, `/api/invites/${inviteToken}/accept`, {
-      method: 'POST'
-    });
-    setMessage('Invite accepted. Organization access is ready.');
-    await refreshOrganizations(activeSession);
-    router.replace('/app/team');
   }
 
   async function refreshWorkspaces(activeSession: Session, organizationId: string) {

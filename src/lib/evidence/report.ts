@@ -22,7 +22,7 @@ export const REPORT_DISPLAY_LABELS = {
   includedStatuses: 'Included statuses'
 } as const;
 
-export type ReportEmptyStateKey = 'no_approved_findings' | 'missing_approved_evidence' | 'report_not_exportable_yet';
+export type ReportEmptyStateKey = 'no_approved_findings' | 'missing_approved_evidence' | 'mixed_currency_findings' | 'report_not_exportable_yet';
 
 export type ReportCitation = {
   label: string;
@@ -136,10 +136,13 @@ export function generateExecutiveAuditReport(input: {
 }): ExecutiveAuditReport {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
   const statusEligibleFindings = input.findings.filter(isCustomerFacingStatus);
-  const includedFindings = statusEligibleFindings
+  const evidenceReadyFindings = statusEligibleFindings
     .map(toCustomerFacingFinding)
     .filter((finding): finding is CustomerFacingReportFinding => finding !== null);
-  const currency = includedFindings[0]?.currency ?? input.findings[0]?.currency ?? 'USD';
+  const evidenceReadyCurrencies = new Set(evidenceReadyFindings.map((finding) => finding.currency));
+  const hasMixedCurrencyFindings = evidenceReadyCurrencies.size > 1;
+  const includedFindings = hasMixedCurrencyFindings ? [] : evidenceReadyFindings;
+  const currency = evidenceReadyFindings[0]?.currency ?? input.findings[0]?.currency ?? 'USD';
   const topFindings = [...includedFindings].sort((a, b) => b.amountMinor - a.amountMinor).slice(0, 10);
   const totalPotentialLeakageMinor = includedFindings.reduce((sum, finding) => sum + finding.amountMinor, 0);
   const totalApprovedRecoverableMinor = sumByOutcome(includedFindings, 'recoverable_leakage');
@@ -150,19 +153,21 @@ export function generateExecutiveAuditReport(input: {
   const riskOnlyFindings = includedFindings.filter((finding) => finding.outcomeType === 'risk_alert');
   const leakageByCustomer = sumBy(includedFindings, (finding) => finding.customerName ?? 'Unassigned customer');
   const leakageByCategory = sumBy(includedFindings, (finding) => finding.findingType);
-  const excludedAfterEvidenceReviewCount = statusEligibleFindings.length - includedFindings.length;
+  const excludedAfterEvidenceReviewCount = statusEligibleFindings.length - evidenceReadyFindings.length;
   const methodology = [
     `Report boundary: only ${CUSTOMER_FACING_REPORT_STATUSES.join(', ')} findings are included in customer-facing totals.`,
     `Evidence boundary: ${EVIDENCE_APPROVAL_RULE}`,
     'Human review: included findings have a reviewer-approved customer-facing status and approved evidence.',
     'Deterministic TypeScript performs money calculations in integer minor units; AI extraction does not calculate leakage totals.',
     'Money findings require approved contract evidence, approved invoice or usage evidence, and formula inputs before export.',
+    'Currency boundary: customer-facing reports do not combine findings across currencies into one total.',
     'Risk-only findings may export with approved contract evidence, but they are counted separately from recoverable actions.',
     'Dismissed, draft, needs_review, and not_recoverable findings are excluded from customer-facing totals.'
   ];
   const blockers: ReportEmptyStateKey[] = [];
   if (statusEligibleFindings.length === 0) blockers.push('no_approved_findings');
   if (excludedAfterEvidenceReviewCount > 0) blockers.push('missing_approved_evidence');
+  if (hasMixedCurrencyFindings) blockers.push('mixed_currency_findings');
   if (includedFindings.length === 0) blockers.push('report_not_exportable_yet');
 
   return {
@@ -253,6 +258,10 @@ export function generateExecutiveAuditReport(input: {
         missing_approved_evidence: {
           title: 'Missing approved evidence',
           detail: 'Some customer-facing findings were excluded because they do not yet have approved contract evidence and, for money findings, approved invoice or usage evidence.'
+        },
+        mixed_currency_findings: {
+          title: 'Mixed currencies require separate reports',
+          detail: 'Customer-facing financial totals cannot combine currencies. Filter the workspace to one currency or generate separate currency-specific reports before export.'
         },
         report_not_exportable_yet: {
           title: 'Report not exportable yet',
