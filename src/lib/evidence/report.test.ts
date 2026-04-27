@@ -144,6 +144,37 @@ describe('executive audit report generation', () => {
     expect(report.exportability.blockers).toEqual(['missing_approved_evidence', 'report_not_exportable_yet']);
   });
 
+  it('ignores strong AI critique when finding status or approved evidence is not customer-ready', () => {
+    const aiStrongDraft = {
+      ...finding({ id: 'ai_strong_draft', status: 'draft', amountMinor: 100_000 }),
+      aiCritiqueRecommendation: 'strong_evidence'
+    } as ReportFinding;
+    const aiStrongMissingEvidence = {
+      ...finding({
+        id: 'ai_strong_missing_invoice',
+        status: 'approved',
+        amountMinor: 75_000,
+        evidenceCitations: [contractCitation]
+      }),
+      aiCritiqueRecommendation: 'strong_evidence'
+    } as ReportFinding;
+
+    const report = generateExecutiveAuditReport({
+      organizationName: 'Acme Audit Co.',
+      workspaceName: 'Q1 Revenue Leakage Audit',
+      findings: [aiStrongDraft, aiStrongMissingEvidence]
+    });
+
+    expect(report.includedFindingCount).toBe(0);
+    expect(report.totalPotentialLeakageMinor).toBe(0);
+    expect(report.topFindings).toEqual([]);
+    expect(report.exportability.exportable).toBe(false);
+    expect(report.exportability.blockers).toEqual([
+      'missing_approved_evidence',
+      'report_not_exportable_yet'
+    ]);
+  });
+
   it('allows risk alerts to export with approved contract-only evidence and labels them risk-only', () => {
     const report = generateExecutiveAuditReport({
       organizationName: 'Acme Audit Co.',

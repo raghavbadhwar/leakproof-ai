@@ -20,6 +20,7 @@ export function AppShell({
   eyebrow,
   topbarControls,
   contextControls,
+  copilotPanel,
   children
 }: {
   navItems: AppShellNavItem[];
@@ -33,10 +34,11 @@ export function AppShell({
   eyebrow: string;
   topbarControls: ReactNode;
   contextControls: ReactNode;
+  copilotPanel?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <main className="audit-shell">
+    <main className={copilotPanel ? 'audit-shell with-copilot' : 'audit-shell'}>
       <aside className="audit-sidebar">
         <div className="sidebar-brand">
           <span className="brand-mark">LP</span>
@@ -99,6 +101,7 @@ export function AppShell({
 
         {children}
       </section>
+      {copilotPanel}
     </main>
   );
 }

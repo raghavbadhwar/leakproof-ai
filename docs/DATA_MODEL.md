@@ -75,6 +75,12 @@ Default `approval_state` is `suggested`. Customer-facing exports require `approv
 Gemini-retrieved evidence suggestions requiring human review.
 Candidates can be attached from semantic search, approved into evidence items, or rejected with an audit trail.
 
+### `finding_ai_critiques`
+
+Advisory AI evidence reviews for findings.
+Critiques store evidence quality score, false-positive risks, reviewer checklist, and AI recommendation status separately from deterministic finding amount and human workflow status.
+Valid recommendation statuses are `strong_evidence`, `weak_evidence`, `conflicting_evidence`, and `needs_more_evidence`.
+
 ### `evidence_packs`
 
 Generated executive report and evidence-pack records.

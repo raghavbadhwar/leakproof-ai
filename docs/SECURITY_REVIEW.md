@@ -10,6 +10,11 @@
 - `GEMINI_API_KEY` is only read inside server-side Gemini helpers.
 - Private API routes require a bearer token and verify organization membership server-side.
 - Workspace-scoped routes also verify the workspace belongs to the submitted organization before reading, uploading, embedding, searching, extracting, reconciling, or reporting.
+- Copilot routes require bearer-token auth, verify organization membership through existing auth helpers, verify the workspace belongs to the submitted organization, and use the Supabase service client only server-side.
+- Copilot assistant persistence is server-written only. RLS allows scoped reads, but browser clients cannot insert or update `assistant_threads`, `assistant_messages`, `assistant_actions`, or `assistant_tool_calls` directly.
+- Copilot assistant tables store safe summaries, entity references, input/output references, result summaries, and redacted failure codes only. They intentionally do not include raw prompt, raw content, contract text, invoice contents, embeddings, model output, or email-body columns.
+- Copilot action confirmation re-checks pending status, expiry, action scope, workspace/org scope, and role before execution. Viewer/member roles cannot create, confirm, or execute mutation actions.
+- Copilot workflow execution calls existing guarded extraction, reconciliation, evidence, status, assignment, and report helpers/routes rather than bypassing API security.
 - Document embedding verifies the requested document belongs to the path workspace before creating jobs or updating document status.
 - Mutating review workflow routes are role-gated to `owner`, `admin`, or `reviewer`; viewers and ordinary members remain read-only.
 - Supabase write policies also use role-aware RLS helpers instead of broad member-write access.
@@ -21,6 +26,8 @@
 - Findings require citations before finding evidence packs can be generated.
 - System-created evidence starts as `suggested`; customer-facing reports use only reviewer-approved evidence with reviewer metadata.
 - Finding status changes are validated server-side; customer-facing reports include only approved, customer-ready, or recovered findings that pass evidence export rules.
+- Copilot cannot calculate money independently, cannot change finding amounts, cannot bypass evidence approval rules, cannot include draft/needs-review findings in customer-facing reports, and cannot export reports/send emails/create invoices/delete documents/change roles.
+- Copilot finding intelligence is advisory only: evidence quality review, false-positive risk, reviewer checklists, CFO summaries, and recovery-note drafts do not mutate finding amount/status or evidence state.
 
 ## Launch blockers to verify in the live project
 
@@ -35,6 +42,7 @@
 - Configure `LEAKPROOF_RATE_LIMIT_BACKEND=supabase` and verify the shared limiter against the deployed Supabase project before running multiple app instances. In-memory limiting is not enough for multi-instance production.
 - Sentry DSN is optional, but should be configured before paid customer usage.
 - `pnpm env:check` must pass with real production values before live workflow testing. It now rejects invalid app URLs, non-Supabase project URLs, anon/service-role key reuse, and Gemini embedding dimensions that do not match the current `vector(1536)` schema.
+- Copilot is safe for a local demo with mock data after the automated gate passes, but pilot use still requires real Supabase/Vercel/Gemini setup, migrations, role-persona QA, and deployed smoke verification.
 
 ## Manual checks
 
@@ -46,6 +54,10 @@
 - Approve a finding and verify an audit event is created.
 - Export a finding and verify an audit event is created.
 - Attach, approve, reject, and remove evidence candidates and verify audit events are created without raw chunk contents.
+- Ask Copilot for total leakage and verify customer-facing leakage is separate from internal pipeline exposure.
+- Ask Copilot to approve a finding as a viewer/member and verify an action is not created.
+- Confirm a reviewer/admin/owner Copilot action and verify the existing workflow route/helper re-checks permissions and writes redacted audit events.
+- Ask Copilot for a recovery note draft and verify it is not sent, does not contain legal threats, and remains advisory.
 - Run `pnpm production:readiness` before live workflow testing and `pnpm production:gate` before deployment.
 
 ## Data safety checklist

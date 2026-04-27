@@ -25,7 +25,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     if (findingError) throw findingError;
     await assertWorkspaceBelongsToOrganization(organizationId, finding.workspace_id);
 
-    const [{ data: evidence, error: evidenceError }, { data: candidates, error: candidatesError }, { data: statusHistory, error: historyError }] =
+    const [
+      { data: evidence, error: evidenceError },
+      { data: candidates, error: candidatesError },
+      { data: statusHistory, error: historyError },
+      { data: latestCritique, error: critiqueError }
+    ] =
       await Promise.all([
         supabase
           .from('evidence_items')
@@ -47,14 +52,30 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
           .select('event_type, metadata, created_at')
           .eq('organization_id', organizationId)
           .eq('entity_id', id)
-          .order('created_at', { ascending: true })
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('finding_ai_critiques')
+          .select('*')
+          .eq('organization_id', organizationId)
+          .eq('workspace_id', finding.workspace_id)
+          .eq('finding_id', id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
       ]);
 
     if (evidenceError) throw evidenceError;
     if (candidatesError) throw candidatesError;
     if (historyError) throw historyError;
+    if (critiqueError) throw critiqueError;
 
-    return NextResponse.json({ finding, evidence: evidence ?? [], candidates: candidates ?? [], status_history: statusHistory ?? [] });
+    return NextResponse.json({
+      finding,
+      evidence: evidence ?? [],
+      candidates: candidates ?? [],
+      status_history: statusHistory ?? [],
+      latest_critique: latestCritique ?? null
+    });
   } catch (error) {
     return handleApiError(error);
   }

@@ -28,6 +28,7 @@ export type AuditEventType =
   | 'reconciliation_run_failed'
   | 'run_superseded'
   | 'finding.created'
+  | 'finding.ai_critique_generated'
   | 'finding.approved'
   | 'finding.exported'
   | 'finding.status_changed'
@@ -45,6 +46,11 @@ export type AuditEventType =
   | 'member_removed'
   | 'member_role_changed'
   | 'finding_assigned'
+  | 'copilot.action_created'
+  | 'copilot.action_confirmed'
+  | 'copilot.action_cancelled'
+  | 'copilot.action_executed'
+  | 'copilot.action_failed'
   | 'view.loaded';
 
 const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
@@ -77,6 +83,7 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'reconciliation_run_failed',
   'run_superseded',
   'finding.created',
+  'finding.ai_critique_generated',
   'finding.approved',
   'finding.exported',
   'finding.status_changed',
@@ -93,7 +100,12 @@ const REQUIRED_AUDIT_EVENTS = new Set<AuditEventType>([
   'member_added',
   'member_removed',
   'member_role_changed',
-  'finding_assigned'
+  'finding_assigned',
+  'copilot.action_created',
+  'copilot.action_confirmed',
+  'copilot.action_cancelled',
+  'copilot.action_executed',
+  'copilot.action_failed'
 ]);
 
 const SENSITIVE_METADATA_KEYS = [
