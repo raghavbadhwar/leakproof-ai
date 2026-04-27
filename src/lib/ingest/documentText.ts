@@ -11,6 +11,9 @@ export type ExtractedDocumentText = {
   pageMap?: Array<{ page: number; text: string; confidence?: number }>;
 };
 
+export const SCANNED_EXTRACTION_MIN_CONFIDENCE = 0.55;
+export const SCANNED_EXTRACTION_LOW_CONFIDENCE_ERROR = 'scanned_document_low_confidence';
+
 const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg']);
 
@@ -128,7 +131,7 @@ async function extractTextWithGeminiMultimodal(
 
     const parsed = multimodalExtractionSchema.parse(parseGeminiJsonResponse(response.text));
     const normalizedText = assertUsableText(parsed.text);
-    return {
+    const extracted = {
       text: normalizedText,
       modality,
       confidence: parsed.confidence,
@@ -138,15 +141,58 @@ async function extractTextWithGeminiMultimodal(
         confidence: page.confidence
       }))
     };
+    assertScannedExtractionConfidence(extracted);
+    return extracted;
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new Error('scanned_document_requires_ocr');
+    }
+    if (isLowConfidenceScannedExtractionError(error)) {
+      throw error;
     }
     if (error instanceof Error && error.message.includes('environment')) {
       throw error;
     }
     throw new Error('document_parse_failed');
   }
+}
+
+export function assertScannedExtractionConfidence(extracted: ExtractedDocumentText): void {
+  const decision = evaluateScannedExtractionConfidence(extracted);
+  if (!decision.ok) {
+    throw new Error(SCANNED_EXTRACTION_LOW_CONFIDENCE_ERROR);
+  }
+}
+
+export function evaluateScannedExtractionConfidence(extracted: ExtractedDocumentText): {
+  ok: boolean;
+  confidence?: number;
+  threshold?: number;
+} {
+  if (extracted.modality !== 'pdf' && extracted.modality !== 'image') {
+    return { ok: true };
+  }
+
+  const confidence = extracted.confidence ?? minimumPageConfidence(extracted.pageMap);
+  if (confidence === undefined) {
+    return { ok: true };
+  }
+
+  return {
+    ok: confidence >= SCANNED_EXTRACTION_MIN_CONFIDENCE,
+    confidence,
+    threshold: SCANNED_EXTRACTION_MIN_CONFIDENCE
+  };
+}
+
+export function isLowConfidenceScannedExtractionError(error: unknown): boolean {
+  return error instanceof Error && error.message === SCANNED_EXTRACTION_LOW_CONFIDENCE_ERROR;
+}
+
+function minimumPageConfidence(pageMap: ExtractedDocumentText['pageMap']): number | undefined {
+  const confidences = pageMap?.map((page) => page.confidence).filter((confidence): confidence is number => typeof confidence === 'number' && Number.isFinite(confidence));
+  if (!confidences || confidences.length === 0) return undefined;
+  return Math.min(...confidences);
 }
 
 function assertUsableText(text: string): string {
@@ -166,7 +212,8 @@ export function getScannedPdfImageIngestionStrategy() {
       'Detect low-text PDFs and contract images during upload.',
       'Send the original file bytes to Gemini multimodal extraction server-side only.',
       'Validate extracted text and page-level references with Zod before chunking.',
-      'Store confidence and page mapping for reviewer-visible citations.'
+      'Store confidence and page mapping for reviewer-visible citations.',
+      'Block scanned extraction when document-level confidence is too low for audit evidence.'
     ],
     reviewerMessage:
       'Scanned PDFs and images use Gemini multimodal extraction so reviewers can see citation-backed evidence before approving terms or findings.'

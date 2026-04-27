@@ -31,8 +31,24 @@ export function handleApiError(error: unknown): NextResponse {
       return jsonError('Too many requests. Wait a moment and try again.', 429);
     }
 
+    if (error.message === 'rate_limit_backend_required' || error.message === 'rate_limit_backend_unavailable') {
+      return jsonError('Request protection is temporarily unavailable. Please try again later.', 503);
+    }
+
     if (error.message === 'approved_evidence_required') {
       return jsonError('Approve at least one attached evidence item before exporting this finding.', 409);
+    }
+
+    if (error.message === 'contract_evidence_required') {
+      return jsonError('Approve at least one contract citation before exporting this finding.', 409);
+    }
+
+    if (error.message === 'invoice_or_usage_evidence_required') {
+      return jsonError('Approve at least one invoice or usage citation before exporting this recoverable finding.', 409);
+    }
+
+    if (error.message === 'calculation_required') {
+      return jsonError('A formula and calculation inputs are required before exporting this recoverable finding.', 409);
     }
 
     if (error.message === 'invalid_last_owner') {

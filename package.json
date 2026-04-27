@@ -8,14 +8,15 @@
     "build": "next build",
     "start": "next start",
     "env:check": "node scripts/env-check.mjs",
+    "production:readiness": "node scripts/production-readiness.mjs",
     "production:gate": "pnpm env:check && pnpm test && pnpm typecheck && pnpm lint && pnpm build",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:unit": "vitest run --exclude '**/*.integration.test.ts' --exclude 'playwright/**'",
-    "test:integration": "RUN_INTEGRATION=1 vitest run --passWithNoTests '**/*.integration.test.ts'",
+    "test:unit": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run tests/integration/*.integration.test.ts",
     "test:watch": "vitest",
-    "test:e2e": "echo \"Playwright tests require production Supabase credentials and browser runner\"",
+    "test:e2e": "NEXT_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=e2e-local-anon-key NEXT_PUBLIC_APP_URL=http://127.0.0.1:3120 pnpm exec next build --webpack && playwright test",
     "smoke": "node scripts/smoke-test.mjs"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "zod": "latest"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

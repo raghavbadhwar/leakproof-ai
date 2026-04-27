@@ -5,6 +5,7 @@ type BillingPeriodValue = 'monthly' | 'quarterly' | 'annual' | 'one_time';
 
 type NormalizerContext = {
   sourceDocumentId: string;
+  sourceLabelsById?: Record<string, string>;
 };
 
 type NormalizedTerm = ContractExtraction['terms'][number];
@@ -40,7 +41,7 @@ const TERM_TYPE_ALIASES: Array<{ type: NormalizedTerm['term_type']; patterns: Re
 
 export function normalizeContractExtraction(raw: unknown, context: NormalizerContext): ContractExtraction {
   const directParse = contractExtractionSchema.safeParse(raw);
-  if (directParse.success) return upgradeStructuredExtraction(directParse.data);
+  if (directParse.success) return upgradeStructuredExtraction(directParse.data, context);
 
   const rawTerms = readRawTerms(raw);
   const normalizedTerms = rawTerms.flatMap((term) => normalizeRawTerm(term, context));
@@ -48,23 +49,30 @@ export function normalizeContractExtraction(raw: unknown, context: NormalizerCon
   return contractExtractionSchema.parse({ terms: normalizedTerms });
 }
 
-function upgradeStructuredExtraction(extraction: ContractExtraction): ContractExtraction {
+function upgradeStructuredExtraction(extraction: ContractExtraction, context: NormalizerContext): ContractExtraction {
   return {
     terms: extraction.terms.map((term) => {
+      const citation = withContextualCitationLabel(term.citation, context);
       const text = cleanText([
         stringifyValue(term.value),
         stringifyValue(term.normalized_value),
         term.source_excerpt,
-        term.citation.excerpt,
-        term.citation.label
+        citation.excerpt,
+        citation.label
       ].filter(Boolean).join(' '));
       const inferredType = inferStructuredTermType(term.term_type, text);
 
-      if (!inferredType || inferredType === term.term_type) return term;
+      if (!inferredType || inferredType === term.term_type) {
+        return {
+          ...term,
+          citation
+        };
+      }
 
       const normalizedValue = normalizeValueForTerm(inferredType, undefined, text);
       return {
         ...term,
+        citation,
         term_type: inferredType,
         normalized_value: normalizedValue.value,
         currency: normalizedValue.currency ?? term.currency,
@@ -315,21 +323,44 @@ function normalizeCitation(rawTerm: JsonRecord, context: NormalizerContext, labe
   const rawCitation = rawTerm.citation;
   if (isRecord(rawCitation)) {
     const sourceType = readString(rawCitation, ['sourceType', 'source_type']);
+    const sourceId = readString(rawCitation, ['sourceId', 'source_id', 'id', 'chunkId', 'chunk_id']) ?? context.sourceDocumentId;
+    const label = labelForSource(
+      context,
+      sourceId,
+      readString(rawCitation, ['label', 'section', 'name']) ?? (labelSeed || 'Contract source')
+    );
     return {
       sourceType: sourceType === 'invoice' || sourceType === 'usage' || sourceType === 'calculation' ? sourceType : 'contract',
-      sourceId: readString(rawCitation, ['sourceId', 'source_id', 'id', 'chunkId', 'chunk_id']) ?? context.sourceDocumentId,
-      label: readString(rawCitation, ['label', 'section', 'name']) ?? (labelSeed || 'Contract source'),
+      sourceId,
+      label,
       excerpt: cleanText(readString(rawCitation, ['excerpt']) ?? excerpt)
     };
   }
 
   const citationText = typeof rawCitation === 'string' ? rawCitation.trim() : '';
+  const sourceId = citationText || context.sourceDocumentId;
   return {
     sourceType: 'contract',
-    sourceId: citationText || context.sourceDocumentId,
-    label: citationText || labelSeed || 'Contract source',
+    sourceId,
+    label: labelForSource(context, sourceId, citationText || labelSeed || 'Contract source'),
     excerpt: cleanText(excerpt)
   };
+}
+
+function withContextualCitationLabel(citation: NormalizedTerm['citation'], context: NormalizerContext): NormalizedTerm['citation'] {
+  return {
+    ...citation,
+    label: labelForSource(context, citation.sourceId, citation.label)
+  };
+}
+
+function labelForSource(context: NormalizerContext, sourceId: string, fallback: string): string {
+  const sourceLabel = context.sourceLabelsById?.[sourceId]?.trim();
+  const fallbackLabel = cleanLabel(fallback || 'Contract source');
+  if (!sourceLabel) return fallbackLabel;
+  if (fallbackLabel === sourceId || fallbackLabel === 'Contract source' || fallbackLabel === sourceLabel) return sourceLabel;
+  if (fallbackLabel.includes(sourceLabel)) return fallbackLabel;
+  return `${sourceLabel} - ${fallbackLabel}`;
 }
 
 function hasUsableCitation(citation: unknown): boolean {
@@ -507,6 +538,10 @@ function normalizeLabel(value: string): string {
 
 function cleanText(value: string): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, 700) || 'Contract source excerpt unavailable.';
+}
+
+function cleanLabel(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().slice(0, 200) || 'Contract source';
 }
 
 function unresolvedValue(rawText: string, reason: string): NormalizedTerm['normalized_value'] {

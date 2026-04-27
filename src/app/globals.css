@@ -3869,6 +3869,359 @@ tbody tr:hover {
   padding-top: 18px;
 }
 
+.cfo-report-layout {
+  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  margin-top: 16px;
+}
+
+.report-print-surface {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.report-cover {
+  align-items: start;
+  border-bottom: 1px solid var(--lp-border);
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.45fr);
+  padding-bottom: 18px;
+}
+
+.report-cover h2 {
+  color: var(--lp-text);
+  font-size: 28px;
+  letter-spacing: 0;
+  line-height: 1.08;
+  margin: 4px 0 8px;
+}
+
+.report-cover p {
+  color: var(--lp-muted);
+  margin: 0;
+  max-width: 760px;
+}
+
+.report-meta-grid {
+  background: #f8fafc;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+}
+
+.report-meta-grid div {
+  display: grid;
+  gap: 2px;
+}
+
+.report-meta-grid dt {
+  color: var(--lp-muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.report-meta-grid dd {
+  color: var(--lp-text);
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.report-trust-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.report-trust-row span {
+  background: #eef6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 850;
+  padding: 7px 10px;
+}
+
+.report-empty-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.report-total-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.report-total-card {
+  background: #f8fafc;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  min-height: 116px;
+  padding: 12px;
+}
+
+.report-total-card span {
+  color: var(--lp-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.report-total-card strong {
+  color: var(--lp-text);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.report-total-card em {
+  color: var(--lp-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.report-table-wrap {
+  overflow-x: auto;
+}
+
+.report-table {
+  border-collapse: collapse;
+  min-width: 100%;
+  width: 100%;
+}
+
+.report-table th,
+.report-table td {
+  border-bottom: 1px solid var(--lp-border);
+  color: var(--lp-text);
+  font-size: 13px;
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.report-table th {
+  color: var(--lp-muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.report-findings-table td:first-child {
+  min-width: 260px;
+}
+
+.report-findings-table td:first-child strong,
+.report-findings-table td:first-child span {
+  display: block;
+}
+
+.report-findings-table td:first-child span {
+  color: var(--lp-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.report-methodology-list {
+  color: var(--lp-text);
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.report-appendix {
+  display: grid;
+  gap: 12px;
+}
+
+.report-appendix article {
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.report-appendix h4 {
+  color: var(--lp-text);
+  margin: 0 0 8px;
+}
+
+.report-appendix ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.report-appendix li {
+  background: #f8fafc;
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+}
+
+.report-appendix li strong {
+  color: #1d4ed8;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.report-appendix li span,
+.report-appendix li p {
+  color: var(--lp-text);
+  margin: 0;
+}
+
+.report-appendix li p {
+  color: var(--lp-muted);
+  font-size: 12px;
+}
+
+.report-controls-panel {
+  background: #fff;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  position: sticky;
+  top: 16px;
+}
+
+.report-controls-panel h3 {
+  color: var(--lp-text);
+  margin: 0;
+}
+
+.report-readiness-list,
+.report-action-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.report-readiness-list span {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  color: var(--lp-muted);
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 10px;
+}
+
+.report-readiness-list strong {
+  color: var(--lp-text);
+}
+
+.report-action-stack button {
+  justify-content: center;
+  width: 100%;
+}
+
+.report-action-stack button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+@media (max-width: 900px) {
+  .cfo-report-layout,
+  .report-cover,
+  .report-empty-grid,
+  .report-total-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-controls-panel {
+    position: static;
+  }
+}
+
+@media print {
+  @page {
+    margin: 0.55in;
+  }
+
+  .no-print,
+  .audit-sidebar,
+  .workspace-header,
+  .workspace-context,
+  .report-chart-grid,
+  .report-section > .metric-grid,
+  .topbar-actions,
+  .context-controls {
+    display: none !important;
+  }
+
+  body,
+  .audit-shell,
+  .audit-main,
+  .workspace-section,
+  .report-print-surface {
+    background: #fff !important;
+  }
+
+  .audit-main {
+    padding: 0 !important;
+  }
+
+  .workspace-section,
+  .report-print-surface {
+    border: 0 !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .cfo-report-layout,
+  .report-cover {
+    display: block;
+  }
+
+  .report-cover,
+  .report-section-block,
+  .report-total-card,
+  .report-appendix article,
+  .empty-state {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-total-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .report-table {
+    font-size: 11px;
+  }
+
+  .report-table thead {
+    display: table-header-group;
+  }
+
+  .report-table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-section-block:has(.report-appendix) {
+    break-before: page;
+    page-break-before: always;
+  }
+}
+
 .evidence-panel {
   align-content: start;
 }

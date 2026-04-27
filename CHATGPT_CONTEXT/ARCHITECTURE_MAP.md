@@ -78,7 +78,7 @@ Important tables:
 Gemini is used for:
 
 - Contract text extraction.
-- Scanned PDF/image multimodal extraction path.
+- Scanned PDF/image multimodal extraction path, still requiring live verification before production scanned-file use.
 - Embeddings.
 - Semantic evidence search support.
 
@@ -86,7 +86,7 @@ AI does not calculate final money amounts.
 
 ## Deterministic Logic
 
-Revenue leakage calculations live in `src/lib/leakage`.
+Revenue leakage calculations live in `src/lib/leakage`. Money rules are period-aware for monthly, quarterly, annual, and one-time billing periods where the extracted or uploaded data supports that boundary.
 
 Rules include:
 
@@ -97,6 +97,7 @@ Rules include:
 - Missed annual uplift.
 - Renewal notice risk.
 - Conflicting amendment risk.
+- Payment terms mismatch risk.
 
 ## Evidence and Reports
 
@@ -110,4 +111,4 @@ Export route:
 
 - `src/app/api/evidence-packs/[id]/export/route.ts`
 
-Reports include only human-approved customer-facing findings and approved evidence.
+Reports include only human-approved customer-facing findings and reviewer-approved evidence. Recoverable money findings require approved contract evidence, approved invoice or usage evidence, and formula inputs; risk-only findings may export with approved contract evidence and are labeled separately.

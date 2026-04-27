@@ -10,7 +10,7 @@ import { REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { chunkCsvRows, chunkTextDocument, type DocumentChunk } from '@/lib/ingest/chunking';
 import { parseCustomerCsv, parseInvoiceCsv, parseUsageCsv } from '@/lib/ingest/csv';
-import { extractDocumentText, type ExtractedDocumentText } from '@/lib/ingest/documentText';
+import { extractDocumentText, isLowConfidenceScannedExtractionError, type ExtractedDocumentText } from '@/lib/ingest/documentText';
 import { buildTenantStoragePath, validateUpload } from '@/lib/uploads/validation';
 
 export const runtime = 'nodejs';
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       domain: form.get('domain') || undefined
     });
     const auth = await requireWorkspaceRole(request, metadata.organization_id, metadata.workspace_id, REVIEWER_WRITE_ROLES);
-    enforceRateLimit({
+    await enforceRateLimit({
       key: `upload:${auth.userId}:${metadata.organization_id}:${metadata.workspace_id}`,
       limit: 10,
       windowMs: 10 * 60 * 1000
@@ -68,7 +68,7 @@ export async function POST(request: Request) {
     const checksum = createHash('sha256').update(bytes).digest('hex');
     const extractedContractText =
       metadata.document_type === 'contract'
-        ? await extractDocumentText({ bytes, mimeType: file.type, fileName: file.name })
+        ? await extractContractTextForUpload({ bytes, mimeType: file.type, fileName: file.name })
         : null;
     const customerAssignment =
       metadata.document_type === 'contract'
@@ -231,6 +231,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ document });
   } catch (error) {
+    if (error instanceof UploadResponseError) {
+      return error.response;
+    }
     return handleApiError(error);
   }
 }
@@ -251,7 +254,9 @@ function buildChunksForUploadedDocument(input: {
       workspaceId: input.workspaceId,
       sourceDocumentId: input.sourceDocumentId,
       text: input.content,
-      modality: input.extractedContractText.modality
+      modality: input.extractedContractText.modality,
+      pageMap: input.extractedContractText.pageMap,
+      extractionConfidence: input.extractedContractText.confidence
     });
   }
 
@@ -266,6 +271,32 @@ function buildChunksForUploadedDocument(input: {
   }
 
   return [];
+}
+
+async function extractContractTextForUpload(input: {
+  bytes: Buffer;
+  mimeType: string;
+  fileName: string;
+}): Promise<ExtractedDocumentText> {
+  try {
+    return await extractDocumentText(input);
+  } catch (error) {
+    if (isLowConfidenceScannedExtractionError(error)) {
+      throw new UploadResponseError(
+        jsonError(
+          'Scanned PDF/image extraction confidence is too low for audit evidence. Upload a clearer scan or a text-based PDF so reviewers are not asked to approve weak extracted text.',
+          422
+        )
+      );
+    }
+    throw error;
+  }
+}
+
+class UploadResponseError extends Error {
+  constructor(readonly response: NextResponse) {
+    super('upload_response_error');
+  }
 }
 
 async function insertDocumentChunks(
@@ -329,6 +360,9 @@ async function ingestInvoiceRecords(
         amount_minor: record.amountMinor,
         currency: record.currency,
         billing_model: record.billingModel,
+        payment_terms_days: record.paymentTermsDays,
+        due_date: record.dueDate,
+        paid_at: record.paidAt,
         product_label: record.productLabel,
         team_label: record.teamLabel,
         service_period_start: record.servicePeriodStart,

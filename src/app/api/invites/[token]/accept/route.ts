@@ -47,6 +47,19 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     if (inviteUpdateError) throw inviteUpdateError;
 
+    await writeAuditEvent(supabase, {
+      organizationId: invite.organization_id,
+      actorUserId: user.id,
+      eventType: 'invite_accepted',
+      entityType: 'organization_invite',
+      entityId: invite.id,
+      metadata: {
+        role: invite.role,
+        target_user_id: user.id,
+        existing_member: Boolean(existingMember)
+      }
+    });
+
     if (!existingMember) {
       await writeAuditEvent(supabase, {
         organizationId: invite.organization_id,

@@ -58,7 +58,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       metadata: {
         from_status: transition.from,
         to_status: transition.to,
-        note: body.note
+        has_note: Boolean(body.note)
       }
     });
 

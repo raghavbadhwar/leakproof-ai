@@ -11,14 +11,16 @@ Upload contracts, invoices, and usage data. LeakProof AI finds under-billed over
 Every finding must have:
 
 1. Contract evidence.
-2. Invoice or usage evidence.
-3. Deterministic money calculation.
+2. Invoice or usage evidence for recoverable money findings.
+3. Deterministic money calculation for money findings.
 4. Human approval before customer-facing use.
 5. Audit trail.
 
+Risk-only findings, such as renewal notice or payment terms risks, may use approved contract-only evidence and are labeled separately from recoverable leakage.
+
 ## Current Build Status
 
-The repository contains a production-shaped Next.js, Supabase, Gemini, and pgvector build.
+The repository contains a production-shaped Next.js, Supabase, Gemini, and pgvector build. Treat it as **repo-side ready** and a **pre-production candidate** until the live Supabase, Gemini, Vercel, mock-audit, smoke, and role QA checks pass.
 
 Ready locally:
 
@@ -31,11 +33,13 @@ Ready locally:
 - Viewer/member read-only posture.
 - Upload validation and tenant-scoped storage paths.
 - TXT, DOCX, text-based PDF, invoice CSV, and usage CSV ingestion.
+- Customer/account linking across contract uploads, invoice CSVs, usage CSVs, extracted customer names, and document assignment APIs.
 - Gemini extraction and embedding boundaries kept server-side.
 - Semantic evidence search over workspace-scoped document chunks.
 - Human term review UI.
 - Evidence candidate attach, approve, reject, and remove workflow.
-- Deterministic reconciliation rules.
+- Period-aware deterministic reconciliation rules, including minimum commitments, usage overages, seat underbilling, expired discounts, missed uplifts, renewal risk, amendment conflict risk, and payment terms mismatch.
+- Idempotent extraction and reconciliation reruns using staged rows, active/superseded promotion, logical keys, and run versions.
 - Finding detail review UX with uncertainty notes, calculation inputs, evidence, and draft customer note.
 - Customer-ready report generation, copy, JSON export, print/PDF export, and export audit events.
 - Scanned PDF/image ingestion strategy and server-side Gemini multimodal path, still requiring live credential verification.
@@ -48,7 +52,9 @@ Still requires live external setup:
 - Supabase Auth redirect URLs configured.
 - Gemini API key and model env vars.
 - Vercel project and production env vars.
+- `pnpm production:gate` with real production values.
 - Deployed smoke test.
+- Mock audit verification that the fixture totals `USD 26,690`.
 - Real browser verification with owner/admin/reviewer/viewer users.
 
 ## Tech Stack
@@ -93,6 +99,12 @@ Run the production environment check:
 pnpm env:check
 ```
 
+Run the production readiness helper before live setup:
+
+```bash
+pnpm production:readiness
+```
+
 Run the full production gate after real env vars are configured:
 
 ```bash
@@ -126,6 +138,8 @@ Optional:
 
 - `SENTRY_DSN`
 - `AI_PROVIDER_FALLBACK_ENABLED`
+
+The env check validates URL shape, Supabase project URL shape, anon/service-role key separation, and that `GEMINI_EMBEDDING_DIMENSION` matches the current `vector(1536)` schema.
 
 Never commit `.env.local`, `.env.production.local`, Supabase service-role keys, Gemini keys, Vercel tokens, uploaded customer files, raw contracts, invoice rows, or customer PII.
 
@@ -167,19 +181,20 @@ See `docs/REPOSITORY_GUIDE.md` for a deeper file-by-file guide.
 1. User signs in through Supabase Auth.
 2. User creates or selects an organization.
 3. User creates or selects an audit workspace.
-4. User uploads contract, invoice CSV, and usage CSV files.
+4. User uploads contract, invoice CSV, and usage CSV files, with a customer/account assignment when available.
 5. The app validates file type and size.
 6. Files are stored under tenant-scoped paths.
 7. Contracts are parsed into text chunks.
 8. CSV rows are normalized into invoice and usage records.
 9. Gemini extracts structured commercial terms with citations.
 10. A human reviewer approves, edits, rejects, or marks terms as needs review.
-11. Deterministic TypeScript reconciliation rules create findings.
-12. Semantic search suggests evidence candidates.
-13. A reviewer approves/rejects candidates into attached evidence.
-14. Findings are approved, dismissed, marked needs review, customer-ready, recovered, or not recoverable.
-15. Customer-ready reports include only human-approved findings and approved evidence.
-16. Important actions write audit events.
+11. Period-aware deterministic TypeScript reconciliation rules create findings.
+12. Extraction and reconciliation reruns stage new rows, promote the latest successful run, and supersede stale active output.
+13. Semantic search suggests evidence candidates.
+14. A reviewer approves/rejects candidates into attached evidence. Evidence created automatically by reconciliation starts as `suggested`, not `approved`.
+15. Findings are approved, dismissed, marked needs review, customer-ready, recovered, or not recoverable.
+16. Customer-ready reports include only human-approved findings and reviewer-approved evidence. Recoverable money findings require approved contract evidence, approved invoice or usage evidence, and deterministic formula inputs; risk-only findings may use contract-only evidence and are labeled risk-only.
+17. Important actions write audit events.
 
 ## Security Model
 
@@ -213,16 +228,16 @@ LeakProof AI handles sensitive contracts and invoices, so the build follows thes
 
 ## Verification Snapshot
 
-Latest local verification from this workspace:
+Release posture:
 
-- `pnpm test`: passed, 20 test files and 52 tests.
-- `pnpm typecheck`: passed.
-- `pnpm lint`: passed.
-- `pnpm build`: passed.
-- `APP_URL=http://localhost:3011 pnpm smoke`: passed for `/app` and `/api/health`.
-- `pnpm env:check`: failed locally because real Supabase, Gemini, and app URL env vars are not configured in this shell.
+- Repo-side status: pre-production candidate.
+- Required local release gate: `pnpm production:gate` after real env vars are available.
+- Required deployed smoke: `APP_URL=<production-url> pnpm smoke`.
+- Required mock audit: verify the mock pilot total is `USD 26,690`.
+- Required live QA: owner/admin/reviewer/viewer role checks against real Supabase Auth.
+- Environment status depends on the local shell or pulled Vercel env files; `pnpm env:check` must pass with real values before production gating.
 
-That means repo-side build quality is green. Live workflow and deployment completion requires real external credentials and a linked Supabase/Vercel setup.
+Do not call production complete until the live workflow, deployed smoke, mock audit, and role QA checks have passed.
 
 ## How To Read This Repo
 

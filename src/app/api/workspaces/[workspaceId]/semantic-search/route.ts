@@ -23,7 +23,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const { workspaceId } = await context.params;
     const body = semanticSearchSchema.parse(await request.json());
     const auth = await requireWorkspaceMember(request, body.organization_id, workspaceId);
-    enforceRateLimit({
+    await enforceRateLimit({
       key: `semantic-search:${auth.userId}:${body.organization_id}:${workspaceId}`,
       limit: 30,
       windowMs: 60 * 1000

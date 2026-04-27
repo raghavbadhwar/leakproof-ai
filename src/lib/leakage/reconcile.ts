@@ -15,6 +15,11 @@ type PeriodAmount = {
   invoices: InvoiceRecord[];
 };
 
+type InvoicePaymentTermsEvidence = {
+  days: number;
+  source: 'payment_terms_days' | 'due_date' | 'line_item_text';
+};
+
 const APPROVED_STATUSES: Array<ContractTerm['reviewStatus']> = ['approved', 'edited'];
 const MS_PER_DAY = 86_400_000;
 
@@ -39,7 +44,7 @@ export function findMinimumCommitmentShortfall(input: {
   const frequency = billingFrequencyFor(input.terms, input.customerId, [minimum.value], 'monthly');
   const contractStart = approvedTerm<{ date: string }>(input.terms, input.customerId, 'contract_start_date');
   const customerInvoices = input.invoices.filter(
-    (invoice) => invoice.customerId === input.customerId && invoice.currency === minimum.value.currency && isIntegerMoney(invoice.amountMinor)
+    (invoice) => invoice.customerId === input.customerId && invoice.currency === minimum.value.currency && isBillableMoneyInvoiceRow(invoice)
   );
   if (customerInvoices.length === 0) return null;
 
@@ -59,7 +64,7 @@ export function findMinimumCommitmentShortfall(input: {
   const shortfallInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
   const citedInvoices = customerInvoices.filter((invoice) => shortfallInvoiceIds.has(invoice.id));
 
-  return {
+  return recoverableFinding({
     id: `finding_minimum_${input.customerId}`,
     customerId: input.customerId,
     type: 'minimum_commitment_shortfall',
@@ -81,7 +86,7 @@ export function findMinimumCommitmentShortfall(input: {
       shortfallMinor
     },
     citations: [minimum.citation, ...citedInvoices.map((invoice) => invoice.citation)]
-  };
+  });
 }
 
 export function findUsageOverageUnbilled(input: {
@@ -116,7 +121,7 @@ export function findUsageOverageUnbilled(input: {
     (invoice) =>
       invoice.customerId === input.customerId &&
       invoice.currency === overagePrice.value.currency &&
-      isIntegerMoney(invoice.amountMinor) &&
+      isBillableMoneyInvoiceRow(invoice) &&
       /overage|usage/i.test(invoice.lineItem)
   );
   const billedOverageByPeriod = groupInvoiceAmountsByPeriod(overageInvoiceRows, frequency, contractStart?.value.date);
@@ -150,7 +155,7 @@ export function findUsageOverageUnbilled(input: {
   const citedUsage = relevantUsage.filter((row) => citedUsageIds.has(row.id));
   const citedInvoices = overageInvoiceRows.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
-  return {
+  return recoverableFinding({
     id: `finding_usage_${input.customerId}`,
     customerId: input.customerId,
     type: 'usage_overage_unbilled',
@@ -172,7 +177,7 @@ export function findUsageOverageUnbilled(input: {
       unbilledMinor
     },
     citations: [allowance.citation, overagePrice.citation, ...citedUsage.map((row) => row.citation), ...citedInvoices.map((row) => row.citation)]
-  };
+  });
 }
 
 export function findSeatUnderbilling(input: {
@@ -197,6 +202,7 @@ export function findSeatUnderbilling(input: {
     (invoice) =>
       invoice.customerId === input.customerId &&
       invoice.currency === seatPrice.value.currency &&
+      isSeatBillingEvidenceRow(invoice) &&
       /seat|user|license/i.test(invoice.lineItem)
   );
   if (seatInvoiceRows.length === 0) return null;
@@ -230,7 +236,7 @@ export function findSeatUnderbilling(input: {
   const citedUsage = seatUsage.filter((row) => citedUsageIds.has(row.id));
   const citedInvoices = seatInvoiceRows.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
-  return {
+  return recoverableFinding({
     id: `finding_seats_${input.customerId}`,
     customerId: input.customerId,
     type: 'seat_underbilling',
@@ -252,7 +258,7 @@ export function findSeatUnderbilling(input: {
       unbilledMinor
     },
     citations: [seatPrice.citation, ...citedUsage.map((row) => row.citation), ...citedInvoices.map((row) => row.citation)]
-  };
+  });
 }
 
 export function findExpiredDiscountStillApplied(input: {
@@ -286,7 +292,7 @@ export function findExpiredDiscountStillApplied(input: {
   const stillAppliedMinor = sumMinor(discountRows.map((invoice) => Math.abs(invoice.amountMinor)));
   if (stillAppliedMinor <= 0) return null;
 
-  return {
+  return recoverableFinding({
     id: `finding_discount_${input.customerId}`,
     customerId: input.customerId,
     type: 'expired_discount_still_applied',
@@ -307,7 +313,7 @@ export function findExpiredDiscountStillApplied(input: {
       stillAppliedMinor
     },
     citations: [discount.citation, discountExpiry.citation, ...discountRows.map((row) => row.citation)]
-  };
+  });
 }
 
 export function findMissedAnnualUplift(input: {
@@ -324,6 +330,8 @@ export function findMissedAnnualUplift(input: {
   if (!anniversary) return null;
 
   const frequency = billingFrequencyFor(input.terms, input.customerId, [baseFee.value], 'monthly');
+  if (frequency === 'one_time') return null;
+
   const postAnniversaryInvoices = input.invoices.filter((invoice) => {
     const invoiceEffectiveDate = parseUtcDate(invoicePeriodDate(invoice));
     return (
@@ -331,8 +339,8 @@ export function findMissedAnnualUplift(input: {
       invoice.currency === baseFee.value.currency &&
       invoiceEffectiveDate !== null &&
       invoiceEffectiveDate.getTime() >= anniversary.getTime() &&
-      isIntegerMoney(invoice.amountMinor) &&
-      /platform|subscription|fee/i.test(invoice.lineItem)
+      isBillableMoneyInvoiceRow(invoice) &&
+      isRecurringUpliftInvoiceRow(invoice)
     );
   });
 
@@ -356,7 +364,7 @@ export function findMissedAnnualUplift(input: {
   const citedInvoiceIds = new Set(periodShortfalls.flatMap((row) => row.invoiceIds));
   const citedInvoices = postAnniversaryInvoices.filter((invoice) => citedInvoiceIds.has(invoice.id));
 
-  return {
+  return recoverableFinding({
     id: `finding_uplift_${input.customerId}`,
     customerId: input.customerId,
     type: 'missed_annual_uplift',
@@ -385,7 +393,7 @@ export function findMissedAnnualUplift(input: {
       annualUplift.citation,
       ...citedInvoices.map((row) => row.citation)
     ]
-  };
+  });
 }
 
 export function findRenewalWindowRisk(input: {
@@ -446,9 +454,16 @@ export function findPaymentTermsMismatch(input: {
   if (expectedDays === null) return null;
 
   const mismatchedInvoices = input.invoices
-    .filter((invoice) => invoice.customerId === input.customerId)
-    .map((invoice) => ({ invoice, invoiceDays: invoicePaymentTermsDays(invoice) }))
-    .filter((row) => row.invoiceDays !== null && row.invoiceDays !== expectedDays);
+    .filter((invoice) => invoice.customerId === input.customerId && !isCreditOrRefundInvoiceRow(invoice))
+    .map((invoice) => ({ invoice, termsEvidence: invoicePaymentTermsEvidence(invoice) }))
+    .filter(
+      (
+        row
+      ): row is {
+        invoice: InvoiceRecord;
+        termsEvidence: NonNullable<ReturnType<typeof invoicePaymentTermsEvidence>>;
+      } => row.termsEvidence !== null && row.termsEvidence.days !== expectedDays
+    );
 
   if (mismatchedInvoices.length === 0) return null;
 
@@ -470,7 +485,11 @@ export function findPaymentTermsMismatch(input: {
       contractPaymentTermsDays: expectedDays,
       mismatches: mismatchedInvoices.map((row) => ({
         invoiceId: row.invoice.invoiceId,
-        invoiceTermsDays: row.invoiceDays
+        invoiceTermsDays: row.termsEvidence.days,
+        evidenceSource: row.termsEvidence.source,
+        dueDate: row.invoice.dueDate,
+        paidAt: row.invoice.paidAt,
+        paidDays: invoicePaidDays(row.invoice)
       }))
     },
     citations: [paymentTerms.citation, ...mismatchedInvoices.map((row) => row.invoice.citation)]
@@ -529,7 +548,21 @@ export function reconcileLeakage(input: {
     findRenewalWindowRisk(input),
     findPaymentTermsMismatch(input),
     findAmendmentConflict(input)
-  ].filter((finding): finding is LeakageFinding => Boolean(finding));
+  ]
+    .filter((finding): finding is LeakageFinding => Boolean(finding))
+    .filter(isReportableFinding);
+}
+
+function recoverableFinding(finding: LeakageFinding): LeakageFinding | null {
+  return isReportableFinding(finding) ? finding : null;
+}
+
+function isReportableFinding(finding: LeakageFinding): boolean {
+  if (finding.outcomeType !== 'recoverable_leakage') return true;
+  return (
+    finding.estimatedAmount.amountMinor > 0 &&
+    finding.citations.some((citation) => citation.sourceType === 'invoice' || citation.sourceType === 'usage')
+  );
 }
 
 function billingFrequencyFor(
@@ -626,6 +659,26 @@ function invoicePeriodDate(invoice: InvoiceRecord): string {
   return invoice.servicePeriodStart ?? invoice.servicePeriodEnd ?? invoice.invoiceDate;
 }
 
+function isBillableMoneyInvoiceRow(invoice: InvoiceRecord): boolean {
+  return isIntegerMoney(invoice.amountMinor) && invoice.amountMinor > 0 && !isCreditOrRefundInvoiceRow(invoice);
+}
+
+function isSeatBillingEvidenceRow(invoice: InvoiceRecord): boolean {
+  return !isCreditOrRefundInvoiceRow(invoice) && (invoice.quantity ?? 0) > 0;
+}
+
+function isCreditOrRefundInvoiceRow(invoice: InvoiceRecord): boolean {
+  return /\b(credit[-\s]*note|credit[-\s]*memo|refund|reversal|write[-\s]?off)\b/i.test(invoice.lineItem);
+}
+
+function isRecurringUpliftInvoiceRow(invoice: InvoiceRecord): boolean {
+  if (/\b(one[-\s]?time|one[-\s]?off|setup|implementation|onboarding|professional services)\b/i.test(invoice.lineItem)) {
+    return false;
+  }
+
+  return /\b(platform|subscription|recurring|monthly|annual|license|base\s*fee|uplift|escalation|price\s*increase|fee)\b/i.test(invoice.lineItem);
+}
+
 function periodForDate(date: string, frequency: BillingFrequency, contractStartDate?: string): BillingPeriod | null {
   const parsed = parseUtcDate(date);
   if (!parsed) return null;
@@ -687,8 +740,35 @@ function paymentTermDays(value: { days?: number; netDays?: number; dueDays?: num
   return firstInteger(value.days, value.netDays, value.dueDays);
 }
 
-function invoicePaymentTermsDays(invoice: InvoiceRecord): number | null {
-  return firstInteger(invoice.paymentTermsDays) ?? daysFromText(invoice.lineItem);
+function invoicePaymentTermsEvidence(invoice: InvoiceRecord): InvoicePaymentTermsEvidence | null {
+  const explicitDays = firstInteger(invoice.paymentTermsDays);
+  if (explicitDays !== null) return { days: explicitDays, source: 'payment_terms_days' };
+
+  const dueDateDays = invoiceDueDateDays(invoice);
+  if (dueDateDays !== null) return { days: dueDateDays, source: 'due_date' };
+
+  const textDays = daysFromText(invoice.lineItem);
+  return textDays === null ? null : { days: textDays, source: 'line_item_text' };
+}
+
+function invoiceDueDateDays(invoice: InvoiceRecord): number | null {
+  if (!invoice.dueDate) return null;
+  return daysBetweenDates(invoice.invoiceDate, invoice.dueDate);
+}
+
+function invoicePaidDays(invoice: InvoiceRecord): number | undefined {
+  if (!invoice.paidAt) return undefined;
+  return daysBetweenDates(invoice.invoiceDate, invoice.paidAt) ?? undefined;
+}
+
+function daysBetweenDates(startDate: string, endDate: string): number | null {
+  const start = parseUtcDate(startDate);
+  const end = parseUtcDate(endDate);
+  if (!start || !end) return null;
+
+  const days = (end.getTime() - start.getTime()) / MS_PER_DAY;
+  if (!Number.isInteger(days) || days < 0) return null;
+  return days;
 }
 
 function daysFromText(value: string): number | null {

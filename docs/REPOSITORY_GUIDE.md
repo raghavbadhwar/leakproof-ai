@@ -129,6 +129,10 @@ Scanned PDF/image handling strategy.
 
 Plain-English handoff for a non-technical founder.
 
+### `docs/QA_RUNBOOK.md`
+
+Manual and automated QA checklist for release gates, owner/admin/reviewer/viewer role testing, mock-audit validation, screenshots, and data-safety checks.
+
 ### `docs/LAUNCH_PLAYBOOK.md`
 
 Launch sequencing and customer-readiness checks.
@@ -181,6 +185,8 @@ Core routes:
 - `src/app/api/workspaces/route.ts`: list/create workspaces.
 - `src/app/api/documents/route.ts`: list documents.
 - `src/app/api/documents/upload/route.ts`: upload and ingest documents.
+- `src/app/api/documents/[documentId]/customer/route.ts`: assign or reassign a document to a customer account.
+- `src/app/api/customers/route.ts`: list or create/reuse customer accounts for an organization.
 - `src/app/api/workspaces/[workspaceId]/documents/[documentId]/embed/route.ts`: embed document chunks.
 - `src/app/api/workspaces/[workspaceId]/semantic-search/route.ts`: semantic evidence search.
 - `src/app/api/extraction/run/route.ts`: run contract extraction.
@@ -229,7 +235,7 @@ Audit event allowlist and metadata redaction.
 
 ### `src/lib/db/`
 
-Supabase clients, auth helpers, role helpers, database mappers, and audit-event writer.
+Supabase clients, auth helpers, role helpers, customer/account linking helpers, database mappers, and audit-event writer.
 
 ### `src/lib/ai/`
 
@@ -253,11 +259,15 @@ Semantic search behavior.
 
 ### `src/lib/leakage/`
 
-Deterministic reconciliation rules and types. Money calculations use integer minor units.
+Deterministic reconciliation rules and types. Money calculations use integer minor units and current rules reconcile by billing period where period data is available. The current rule set includes minimum commitments, usage overages, seat underbilling, expired discounts, missed uplifts, renewal risk, amendment conflict risk, and payment terms mismatch.
 
 ### `src/lib/evidence/`
 
 Evidence pack generation, evidence candidate helpers, citation helpers, and executive report generation.
+
+### `src/lib/audit/runVersions.ts`
+
+Helpers for idempotent extraction/reconciliation reruns, active/superseded output filtering, logical keys, and finding period metadata.
 
 ### `src/lib/uploads/`
 
@@ -310,13 +320,14 @@ Prompt templates for:
 
 ## `sample-data/`
 
-Fake customer data for testing and demos:
+Fake customer data for testing and demos. Use this data before any real customer pilot.
 
 - `customer_alpha_contract.txt`
 - `customer_alpha_invoices.csv`
 - `customer_alpha_usage.csv`
 - `expected_findings.json`
 - `synthetic-audit-cases.json`
+- `mock-pilot/`: multi-customer mock audit fixtures. The expected customer-facing leakage total is `USD 26,690`.
 
 No real customer data should be committed.
 

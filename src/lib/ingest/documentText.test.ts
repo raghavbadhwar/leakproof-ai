@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { extractDocumentText, getScannedPdfImageIngestionStrategy } from './documentText';
+import {
+  SCANNED_EXTRACTION_LOW_CONFIDENCE_ERROR,
+  assertScannedExtractionConfidence,
+  evaluateScannedExtractionConfidence,
+  extractDocumentText,
+  getScannedPdfImageIngestionStrategy
+} from './documentText';
 
 describe('extractDocumentText', () => {
   it('extracts usable plain text contracts', async () => {
@@ -23,6 +29,26 @@ describe('extractDocumentText', () => {
         fileName: 'contract.txt'
       })
     ).rejects.toThrow('empty_document_text');
+  });
+
+  it('blocks low-confidence scanned extraction before creating audit chunks', () => {
+    expect(() =>
+      assertScannedExtractionConfidence({
+        text: 'Scanned contract text with uncertain OCR but enough characters.',
+        modality: 'pdf',
+        confidence: 0.41,
+        pageMap: [{ page: 1, text: 'Scanned contract text with uncertain OCR but enough characters.', confidence: 0.41 }]
+      })
+    ).toThrow(SCANNED_EXTRACTION_LOW_CONFIDENCE_ERROR);
+  });
+
+  it('allows scanned extraction without confidence but marks page confidence when available elsewhere', () => {
+    const decision = evaluateScannedExtractionConfidence({
+      text: 'Readable scanned contract text without a model confidence score.',
+      modality: 'image'
+    });
+
+    expect(decision.ok).toBe(true);
   });
 
   it('documents the selected scanned PDF and image production ingestion strategy', () => {

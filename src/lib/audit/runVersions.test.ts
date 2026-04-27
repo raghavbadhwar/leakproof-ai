@@ -106,8 +106,11 @@ function reportFinding(id: string, amountMinor: number, isActive: boolean, super
     amountMinor,
     currency: 'USD',
     confidence: 0.94,
-    calculation: { formula: 'minimum_commitment - invoiced_amount' },
-    evidenceCitations: [{ label: 'Contract section 4.1', sourceType: 'contract', approvalState: 'approved' }],
+    calculation: { formula: 'minimum_commitment - invoiced_amount', minimum_commitment_minor: 150_000, invoiced_amount_minor: 50_000 },
+    evidenceCitations: [
+      { label: 'Contract section 4.1', sourceType: 'contract', approvalState: 'approved' },
+      { label: 'Invoice row 12', sourceType: 'invoice', approvalState: 'approved' }
+    ],
     is_active: isActive,
     superseded_at: supersededAt
   };

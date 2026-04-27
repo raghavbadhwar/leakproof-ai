@@ -31,7 +31,7 @@ LeakProof AI is a secure revenue leakage recovery workspace that turns contracts
 - No hallucinated money.
 - AI extracts and retrieves; deterministic TypeScript calculates.
 - Every finding needs evidence.
-- Human approval is required before customer-facing use.
+- Human approval and reviewer-approved evidence are required before customer-facing use.
 - Multi-tenant access control is required.
 - Secrets stay server-side.
 - Important actions are audit logged.

@@ -50,6 +50,8 @@ Documents:
 
 - `src/app/api/documents/route.ts`
 - `src/app/api/documents/upload/route.ts`
+- `src/app/api/documents/[documentId]/customer/route.ts`
+- `src/app/api/customers/route.ts`
 
 Extraction and terms:
 
@@ -136,6 +138,7 @@ Uploads:
 Audit:
 
 - `src/lib/audit/auditEvents.ts`
+- `src/lib/audit/runVersions.ts`
 
 ## Tests
 

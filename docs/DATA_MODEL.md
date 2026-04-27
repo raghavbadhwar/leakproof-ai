@@ -68,6 +68,7 @@ Deterministic findings from reconciliation.
 
 Structured evidence attached to findings.
 Evidence rows are scoped by both organization and workspace so finding detail, exports, and removal actions cannot cross workspace boundaries.
+Default `approval_state` is `suggested`. Customer-facing exports require `approval_state = approved` with reviewer metadata. Suggested, rejected, draft, and system-created evidence are excluded.
 
 ### `evidence_candidates`
 

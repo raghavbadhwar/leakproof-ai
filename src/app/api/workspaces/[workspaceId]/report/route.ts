@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { enforceRateLimit } from '@/lib/api/rateLimit';
 import { workspaceScopedBodySchema } from '@/lib/api/schemas';
 import { handleApiError } from '@/lib/api/responses';
 import { writeAuditEvent } from '@/lib/db/audit';
@@ -6,6 +7,7 @@ import { requireWorkspaceRole } from '@/lib/db/auth';
 import { REVIEWER_WRITE_ROLES } from '@/lib/db/roles';
 import { createSupabaseServiceClient } from '@/lib/db/supabaseServer';
 import { isEvidenceCandidateExportReady } from '@/lib/evidence/candidates';
+import { exportCitationForEvidenceRow } from '@/lib/evidence/exportReadiness';
 import { CUSTOMER_FACING_REPORT_STATUSES, generateExecutiveAuditReport, type ReportCitation, type ReportFinding } from '@/lib/evidence/report';
 
 export const runtime = 'nodejs';
@@ -15,6 +17,11 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const { workspaceId } = await context.params;
     const body = workspaceScopedBodySchema.parse(await request.json());
     const auth = await requireWorkspaceRole(request, body.organization_id, workspaceId, REVIEWER_WRITE_ROLES);
+    await enforceRateLimit({
+      key: `report:${auth.userId}:${body.organization_id}:${workspaceId}`,
+      limit: 10,
+      windowMs: 10 * 60 * 1000
+    });
     const supabase = createSupabaseServiceClient();
 
     const [{ data: organization, error: organizationError }, { data: workspace, error: workspaceError }, { data: findingRows, error: findingsError }] =
@@ -40,10 +47,12 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     const [{ data: approvedEvidenceRows, error: evidenceError }, { data: candidateRows, error: candidatesError }] = await Promise.all([
       supabase
         .from('evidence_items')
-        .select('id, finding_id, citation, excerpt, approval_state')
+        .select('id, finding_id, evidence_type, citation, excerpt, approval_state, reviewed_by, reviewed_at')
         .eq('organization_id', body.organization_id)
         .eq('workspace_id', workspaceId)
         .eq('approval_state', 'approved')
+        .not('reviewed_by', 'is', null)
+        .not('reviewed_at', 'is', null)
         .in('finding_id', safeFindingIds),
       supabase
         .from('evidence_candidates')
@@ -70,12 +79,13 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     for (const row of approvedEvidenceRows ?? []) {
       if (candidateEvidenceIds.has(row.id) && !approvedCandidateEvidenceIds.has(row.id)) continue;
       const citation = row.citation as { label?: string; excerpt?: string; sourceType?: string };
+      const exportCitation = exportCitationForEvidenceRow(row);
       const next = evidenceByFinding.get(row.finding_id) ?? [];
       next.push({
         label: citation.label ?? 'Source evidence',
         excerpt: row.excerpt ?? citation.excerpt,
-        sourceType: citation.sourceType,
-        approvalState: row.approval_state
+        sourceType: exportCitation.sourceType ?? undefined,
+        approvalState: exportCitation.approvalState as ReportCitation['approvalState']
       });
       evidenceByFinding.set(row.finding_id, next);
     }
@@ -107,13 +117,17 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
       findings
     });
 
+    if (!report.exportability.exportable) {
+      return NextResponse.json({ report, evidence_pack_id: null });
+    }
+
     const { data: pack, error: packError } = await supabase
       .from('evidence_packs')
       .insert({
         organization_id: body.organization_id,
         workspace_id: workspaceId,
         title: `${workspace.name} Executive Audit Report`,
-        selected_finding_ids: report.topFindings.map((finding) => finding.id),
+        selected_finding_ids: report.includedFindings.map((finding) => finding.id),
         report_json: report,
         status: 'generated',
         generated_by: auth.userId

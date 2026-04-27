@@ -60,7 +60,7 @@ Product principle: LLM extracts. Code calculates. Human approves.
 | File validation | Implemented | Type and size validation exist before persistence. |
 | Tenant-scoped storage paths | Implemented | Source files are stored under organization/workspace paths. |
 | Text extraction and chunking | Implemented | Creates citation-ready document chunks. |
-| Scanned PDF/image ingestion | Partially implemented | Gemini multimodal path is defined; needs live credential and sample verification. |
+| Scanned PDF/image ingestion | Partially implemented | Server-side Gemini multimodal extraction path is implemented, including low-confidence blocking, but production use still needs live Gemini credentials and representative scanned-file QA. |
 | Duplicate file detection | Planned | Use hashes to avoid duplicate source records and stale reruns. |
 | Direct integrations | Planned | QuickBooks/Xero, HubSpot/Salesforce, Chargebee/Recurly, DocuSign/Ironclad, Google Drive. |
 
@@ -87,7 +87,7 @@ Product principle: LLM extracts. Code calculates. Human approves.
 | Contract term review | Implemented | Reviewers can approve, edit, mark needs review, or reject terms. |
 | Finding status review | Implemented | Findings support draft, needs review, approved, dismissed, customer-ready, recovered, not recoverable. |
 | Reviewer notes | Implemented | Finding review notes and term reviewer fields exist. |
-| Human approval before customer-facing output | Implemented | Reports are based on approved/customer-ready findings. |
+| Human approval before customer-facing output | Implemented | Reports are based on customer-facing finding statuses and reviewer-approved evidence; system-created evidence starts as suggested. |
 | Evidence candidate review | Implemented | Candidates can be approved into evidence or rejected. |
 | Dedicated audit queue | Planned | A reviewer inbox across workspaces is not yet a separate product surface. |
 | Escalation workflow | Planned | Legal/finance escalation routing is a later workflow. |
@@ -105,10 +105,10 @@ Product principle: LLM extracts. Code calculates. Human approves.
 | Missed annual uplift | Implemented | Checks post-anniversary invoice pricing against uplift terms. |
 | Renewal/notice window risk | Implemented | Creates risk findings around upcoming or missed notice deadlines. |
 | Amendment conflict risk | Implemented | Flags later amendments that may supersede approved terms. |
-| Payment terms mismatch | Planned | Listed in product scope, but not yet implemented as a reconciliation rule. |
-| Period-aware reconciliation | Planned | Current rules are customer-level; full version must reconcile by billing period. |
-| Customer-contract linkage workflow | Planned | Full app needs explicit mapping from customers to contracts, invoices, and usage sources. |
-| Rerun idempotency and stale finding handling | Planned | Needed to prevent duplicate or obsolete findings after data changes. |
+| Payment terms mismatch | Implemented | Creates a risk finding when approved contract payment terms differ from invoice terms detected from structured fields or invoice line text. |
+| Period-aware reconciliation | Implemented | Current money rules reconcile inside monthly, quarterly, annual, or one-time billing periods instead of letting another period offset a shortfall. |
+| Customer-contract linkage workflow | Implemented | Upload metadata, CSV customer fields, domain/name matching, extracted customer names, customer APIs, and document assignment APIs link contracts, invoices, usage, and findings to customer accounts. |
+| Rerun idempotency and stale finding handling | Implemented | Extraction and reconciliation use run versions, logical keys, staged rows, active/superseded promotion, and tests to avoid doubled report totals. |
 
 ## 8. Evidence And Semantic Search
 
@@ -128,7 +128,7 @@ Product principle: LLM extracts. Code calculates. Human approves.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Customer-ready report generation | Implemented | Generates executive report JSON from approved findings. |
+| Customer-ready report generation | Implemented | Generates executive report JSON from customer-facing findings that pass approved-evidence export rules. |
 | Report summary metrics | Implemented | Total potential leakage, approved recoverable, prevented leakage, risk-only items. |
 | Top findings | Implemented | Customer-ready report includes the most important findings. |
 | Copy report | Implemented | Copies report text and records export event. |

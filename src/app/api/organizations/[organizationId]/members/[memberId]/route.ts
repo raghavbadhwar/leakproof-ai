@@ -38,7 +38,7 @@ export async function PATCH(
     await writeAuditEvent(supabase, {
       organizationId: parsedOrganizationId,
       actorUserId: auth.userId,
-      eventType: 'member_role_changed',
+      eventType: 'role.changed',
       entityType: 'organization_member',
       entityId: parsedMemberId,
       metadata: {
