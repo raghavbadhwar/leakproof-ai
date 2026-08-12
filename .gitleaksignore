@@ -1,0 +1,4 @@
+# Reviewed synthetic Google-key-shaped values used to verify redaction.
+src/lib/ai/safety.test.ts:generic-api-key:22
+src/lib/ai/safety.test.ts:generic-api-key:69
+src/lib/audit/aiEvents.test.ts:generic-api-key:65

@@ -370,7 +370,7 @@ function actionRecord(overrides: Partial<AssistantActionRecord> = {}): Assistant
     result_summary: null,
     result_refs: {},
     failure_code: null,
-    expires_at: '2026-04-28T00:00:00.000Z',
+    expires_at: null,
     ...overrides
   };
 }
