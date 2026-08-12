@@ -4,6 +4,18 @@ LeakProof AI is a production-minded revenue leakage recovery workspace for B2B c
 
 This is not a chatbot-first product. The main experience is an audit workflow for finance, RevOps, and founders.
 
+```mermaid
+flowchart LR
+  D["Contracts, invoices, usage"] --> X["Extraction and normalization"]
+  X --> C["Deterministic reconciliation"]
+  C --> E["Evidence-linked finding"]
+  E --> H{"Human review"}
+  H -->|"approved"| R["Customer-ready report"]
+  H -->|"needs work"| C
+  AI["AI assistance"] -.-> X
+  AI -.-> E
+```
+
 ## Product Promise
 
 Upload contracts, invoices, and usage data. LeakProof AI finds under-billed overages, missed minimum commitments, unbilled seats, expired discounts still being applied, missed annual uplifts, and renewal or notice-window risks.
